@@ -84,8 +84,8 @@ Checked-in artifact forensics are summarized in `docs/FAILURE_TAXONOMY.md`.
 Current checked-in snapshot (2026-03-07):
 - `6` checked-in claim artifacts include `error_forensics.json`; `1` currently has populated error buckets.
 - The dominant tracked bucket is `timeout`.
-- Best checked-in error reduction: `qwen3.5:4b` minimal reduced tracked errors from `6 -> 0` across `40` eval items (`15.0% -> 0.0%`).
-- BenchLab exposes the same aggregate view through `GET /v1/benchlab/artifacts/forensics`.
+- Best checked-in tracked reduction: `qwen3.5:4b` minimal removed recorded timeout errors from `6 -> 0` in the checked-in snapshot (baseline coverage: `40` eval items).
+- BenchLab now surfaces the same aggregate view in the UI and through `GET /v1/benchlab/artifacts/forensics`.
 
 ## Hiring Packet
 
@@ -94,6 +94,7 @@ If you are using this repository as a portfolio artifact:
 - Hiring brief: `docs/HIRING_BRIEF.md`
 - Resume bullets: `docs/RESUME_BULLETS.md`
 - Interview talk track: `docs/INTERVIEW_TALK_TRACK.md`
+- Failure taxonomy snapshot: `docs/FAILURE_TAXONOMY.md`
 
 ## Quick start
 

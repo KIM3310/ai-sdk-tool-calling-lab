@@ -54,7 +54,7 @@ That combination maps well to roles such as:
   - canceling running jobs
   - runtime report inspection
   - stdout/stderr log viewing from the browser
-  - checked-in artifact forensics overview with coverage gaps (`missing_forensics_file` vs `no_error_buckets`)
+  - checked-in artifact forensics overview in both UI and API, with coverage gaps (`missing_forensics_file` vs `no_error_buckets`)
 
 ### Prompt-mode BFCL research
 - Grok-specific prompt experiment.
@@ -88,7 +88,7 @@ Use only claims that are explicitly true in the repo:
   - `6` claim artifacts with `error_forensics.json`
   - `1` artifact with populated error buckets
   - dominant bucket: `timeout`
-  - strongest tracked reduction: `qwen3.5:4b` minimal, `6 -> 0` errors across `40` eval items
+  - strongest tracked reduction: `qwen3.5:4b` minimal, recorded timeout errors `6 -> 0` in the checked-in snapshot (baseline coverage: `40` eval items)
 
 - BenchLab and StagePilot now pass repository quality gates:
   - `npm run check:biome`

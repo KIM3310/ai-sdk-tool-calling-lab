@@ -623,6 +623,19 @@
 
           <section class="panel report-shell">
             <div class="panel-header">
+              <h2>Checked-In Artifact Forensics</h2>
+              <span class="tiny" id="artifact-forensics-title"
+                >loading checked-in claims</span
+              >
+            </div>
+            <div class="meta-grid" id="artifact-forensics-meta"></div>
+            <pre id="artifact-forensics-body">
+Loading checked-in artifact failure taxonomy.</pre
+            >
+          </section>
+
+          <section class="panel report-shell">
+            <div class="panel-header">
               <h2>Artifact Snapshot</h2>
               <span class="tiny" id="artifact-title">select an artifact</span>
             </div>
@@ -675,6 +688,7 @@
     "use strict";
     const state = {
       artifacts: [],
+      artifactForensics: null,
       compare: null,
       configs: [],
       forensics: null,
@@ -691,6 +705,11 @@
     };
 
     const els = {
+      artifactForensicsBody: document.querySelector("#artifact-forensics-body"),
+      artifactForensicsMeta: document.querySelector("#artifact-forensics-meta"),
+      artifactForensicsTitle: document.querySelector(
+        "#artifact-forensics-title"
+      ),
       artifactBody: document.querySelector("#artifact-body"),
       artifactChart: document.querySelector("#artifact-chart"),
       artifactMeta: document.querySelector("#artifact-meta"),
@@ -808,6 +827,27 @@
         : "-";
     }
 
+    function getArtifactForensicsClaim(artifactId) {
+      const claims = state.artifactForensics?.claims;
+      if (!Array.isArray(claims)) {
+        return null;
+      }
+      return claims.find((claim) => claim.artifactId === artifactId) || null;
+    }
+
+    function formatArtifactForensicsStatus(claimForensics) {
+      if (!claimForensics) {
+        return "loading";
+      }
+      if (claimForensics.hasErrorBuckets) {
+        return claimForensics.dominantBucket || "tracked";
+      }
+      if (claimForensics.hasForensicsFile) {
+        return "no_error_buckets";
+      }
+      return "missing_forensics";
+    }
+
     function renderCompareControls() {
       const options = state.runs
         .map((run) => {
@@ -871,6 +911,7 @@
         (artifact) => artifact.outcome === "improved"
       );
       const bestArtifact = improvedArtifacts[0] || null;
+      const artifactForensicsSummary = state.artifactForensics?.summary || null;
       els.headlineStats.innerHTML = [
         latest
           ? { label: "Latest Runtime", value: latest.name }
@@ -884,6 +925,16 @@
         {
           label: "Best Checked-In Delta",
           value: bestArtifact ? `${formatMetric(bestArtifact.deltaPp)}pp` : "-",
+        },
+        {
+          label: "Tracked Claim Errors",
+          value: artifactForensicsSummary
+            ? `${artifactForensicsSummary.baselineErrorItems} -> ${artifactForensicsSummary.ralphErrorItems}`
+            : "-",
+        },
+        {
+          label: "Dominant Claim Bucket",
+          value: artifactForensicsSummary?.dominantBucket || "-",
         },
       ]
         .map(
@@ -1218,6 +1269,11 @@
 
       els.artifactsList.innerHTML = state.artifacts
         .map((artifact) => {
+          const claimForensics = getArtifactForensicsClaim(artifact.id);
+          const forensicsStatus = formatArtifactForensicsStatus(claimForensics);
+          const errorDelta = claimForensics
+            ? `${claimForensics.baselineErrorItems} -> ${claimForensics.ralphErrorItems}`
+            : "-";
           return `
               <article class="card">
                 <div class="card-top">
@@ -1232,6 +1288,8 @@
                   <div class="meta-item"><strong>Delta</strong>${formatMetric(artifact.deltaPp)} pp</div>
                   <div class="meta-item"><strong>Baseline</strong>${formatMetric(artifact.baselineScore)}</div>
                   <div class="meta-item"><strong>RALPH</strong>${formatMetric(artifact.ralphScore)}</div>
+                  <div class="meta-item"><strong>Failure Bucket</strong>${forensicsStatus}</div>
+                  <div class="meta-item"><strong>Error Items</strong>${errorDelta}</div>
                 </div>
                 <div class="actions">
                   <button class="ghost" type="button" data-artifact="${artifact.id}">Inspect</button>
@@ -1240,6 +1298,74 @@
             `;
         })
         .join("");
+    }
+
+    function renderArtifactForensics(payload) {
+      state.artifactForensics = payload || null;
+      if (!payload?.summary) {
+        els.artifactForensicsTitle.textContent = "loading checked-in claims";
+        els.artifactForensicsMeta.innerHTML = "";
+        els.artifactForensicsBody.textContent =
+          "Loading checked-in artifact failure taxonomy.";
+        return;
+      }
+
+      const summary = payload.summary;
+      els.artifactForensicsTitle.textContent = `${summary.artifactsWithTrackedErrors || 0} claim(s) with tracked errors`;
+      els.artifactForensicsMeta.innerHTML = [
+        { label: "Claims", value: String(summary.artifacts ?? 0) },
+        {
+          label: "With Buckets",
+          value: String(summary.artifactsWithErrorBuckets ?? 0),
+        },
+        {
+          label: "Coverage Gaps",
+          value: String((payload.gaps || []).length),
+        },
+        {
+          label: "Baseline Errors",
+          value: `${summary.baselineErrorItems} / ${summary.baselineTotalItems}`,
+        },
+        {
+          label: "RALPH Errors",
+          value: `${summary.ralphErrorItems} / ${summary.ralphTotalItems}`,
+        },
+        {
+          label: "Dominant Bucket",
+          value: summary.dominantBucket || "-",
+        },
+      ]
+        .map(
+          (item) =>
+            `<div class="meta-item"><strong>${item.label}</strong>${item.value}</div>`
+        )
+        .join("");
+
+      const bucketLines = (payload.buckets || []).slice(0, 8).map((bucket) => {
+        return `${bucket.bucket}: ${bucket.baselineCount} -> ${bucket.ralphCount}`;
+      });
+      const gapLines = (payload.gaps || []).slice(0, 8).map((gap) => {
+        return `${gap.gap}: ${gap.modelName || gap.claimName}`;
+      });
+      const strongestClaims = (payload.claims || [])
+        .filter((claim) => claim.hasErrorBuckets)
+        .slice(0, 5)
+        .map((claim) => {
+          return `${claim.modelName || claim.claimName}: ${claim.baselineErrorItems} -> ${claim.ralphErrorItems} (${claim.dominantBucket || "-"})`;
+        });
+      const sections = [];
+      if (bucketLines.length > 0) {
+        sections.push(["[tracked buckets]", ...bucketLines].join("\n"));
+      }
+      if (strongestClaims.length > 0) {
+        sections.push(["[claim deltas]", ...strongestClaims].join("\n"));
+      }
+      if (gapLines.length > 0) {
+        sections.push(["[coverage gaps]", ...gapLines].join("\n"));
+      }
+      els.artifactForensicsBody.textContent = sections.length
+        ? sections.join("\n\n")
+        : "No checked-in artifact forensics found yet.";
     }
 
     function renderReport(run) {
@@ -1312,6 +1438,7 @@
 
       state.selectedArtifactId = detail.artifact.id;
       const artifact = detail.artifact;
+      const claimForensics = getArtifactForensicsClaim(artifact.id);
       els.artifactTitle.textContent = artifact.modelName || artifact.claimName;
       els.artifactMeta.innerHTML = [
         { label: "Provider", value: artifact.providerName || "-" },
@@ -1329,6 +1456,16 @@
           label: "Evidence",
           value: artifact.summaryRelativePath,
         },
+        {
+          label: "Failure Bucket",
+          value: claimForensics?.dominantBucket || "-",
+        },
+        {
+          label: "Error Items",
+          value: claimForensics
+            ? `${claimForensics.baselineErrorItems} -> ${claimForensics.ralphErrorItems}`
+            : "-",
+        },
       ]
         .map(
           (item) =>
@@ -1342,6 +1479,24 @@
       }
       els.artifactBody.textContent =
         detail.reportMarkdown || "benchmark_report.md not found";
+      if (claimForensics) {
+        const coverageText = claimForensics.hasErrorBuckets
+          ? [
+              "[checked-in forensics]",
+              `dominant_bucket=${claimForensics.dominantBucket || "-"}`,
+              `errors=${claimForensics.baselineErrorItems} -> ${claimForensics.ralphErrorItems}`,
+            ].join("\n")
+          : [
+              "[checked-in forensics]",
+              claimForensics.hasForensicsFile
+                ? "no populated error buckets in checked-in artifact"
+                : "missing error_forensics.json",
+            ].join("\n");
+        els.artifactBody.textContent = [
+          coverageText,
+          detail.reportMarkdown || "benchmark_report.md not found",
+        ].join("\n\n");
+      }
     }
 
     function renderRuntimeModel(detail) {
@@ -1445,8 +1600,12 @@
     }
 
     async function loadArtifacts() {
-      const payload = await fetchJson("/v1/benchlab/artifacts/best");
-      state.artifacts = payload.artifacts || [];
+      const [artifactsPayload, forensicsPayload] = await Promise.all([
+        fetchJson("/v1/benchlab/artifacts/best"),
+        fetchJson("/v1/benchlab/artifacts/forensics"),
+      ]);
+      state.artifacts = artifactsPayload.artifacts || [];
+      renderArtifactForensics(forensicsPayload);
       renderArtifacts();
       renderHeadline();
 
