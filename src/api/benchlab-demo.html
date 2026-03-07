@@ -345,6 +345,22 @@
       gap: 12px;
     }
 
+    .artifact-chart {
+      min-height: 120px;
+      padding: 12px;
+      overflow: auto;
+      background: rgba(255, 255, 255, 0.52);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+    }
+
+    .artifact-chart svg {
+      display: block;
+      width: 100%;
+      min-width: 520px;
+      height: auto;
+    }
+
     .empty {
       padding: 18px;
       color: var(--muted);
@@ -536,6 +552,89 @@
             </div>
           </section>
 
+          <section class="panel">
+            <div class="panel-header">
+              <h2>Model Results</h2>
+              <span class="tiny" id="runtime-models-meta"
+                >select a runtime</span
+              >
+            </div>
+            <div class="list" id="runtime-models-list">
+              <div class="empty">
+                Pick a runtime to inspect model-level results.
+              </div>
+            </div>
+          </section>
+
+          <section class="panel report-shell">
+            <div class="panel-header">
+              <h2>Runtime Compare</h2>
+              <span class="tiny" id="compare-title">pick two runtimes</span>
+            </div>
+            <div class="field-grid">
+              <label>
+                Left Runtime
+                <select id="compare-left"></select>
+              </label>
+              <label>
+                Right Runtime
+                <select id="compare-right"></select>
+              </label>
+            </div>
+            <div class="meta-grid" id="compare-meta"></div>
+            <pre
+              id="compare-body"
+            >Pick two runtimes to compare model deltas and variants.</pre>
+          </section>
+
+          <section class="panel report-shell">
+            <div class="panel-header">
+              <h2>Failure Forensics</h2>
+              <span class="tiny" id="forensics-title">select a runtime</span>
+            </div>
+            <div class="meta-grid" id="forensics-meta"></div>
+            <pre
+              id="forensics-body"
+            >Pick a runtime to inspect timeout, schema, and missing-arg trends.</pre>
+          </section>
+
+          <section class="panel report-shell">
+            <div class="panel-header">
+              <h2>Variant Search</h2>
+              <span class="tiny" id="variant-title"
+                >historical recommendations</span
+              >
+            </div>
+            <div class="meta-grid" id="variant-meta"></div>
+            <pre
+              id="variant-body"
+            >Loading variant leaderboard and next-try recommendations.</pre>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h2>Best Checked-In Claims</h2>
+              <span class="tiny" id="artifacts-meta">loading</span>
+            </div>
+            <div class="list" id="artifacts-list">
+              <div class="empty">No tracked artifacts found yet.</div>
+            </div>
+          </section>
+
+          <section class="panel report-shell">
+            <div class="panel-header">
+              <h2>Artifact Snapshot</h2>
+              <span class="tiny" id="artifact-title">select an artifact</span>
+            </div>
+            <div class="meta-grid" id="artifact-meta"></div>
+            <div class="artifact-chart" id="artifact-chart">
+              Pick a checked-in artifact to inspect its chart.
+            </div>
+            <pre
+              id="artifact-body"
+            >Pick a checked-in artifact to inspect its benchmark report.</pre>
+          </section>
+
           <section class="panel report-shell">
             <div class="panel-header">
               <h2>Report</h2>
@@ -545,6 +644,19 @@
             <pre
               id="report-body"
             >Pick a runtime to inspect its matrix report.</pre>
+          </section>
+
+          <section class="panel report-shell">
+            <div class="panel-header">
+              <h2>Model Detail</h2>
+              <span class="tiny" id="runtime-model-title"
+                >select a model run</span
+              >
+            </div>
+            <div class="meta-grid" id="runtime-model-meta"></div>
+            <pre
+              id="runtime-model-body"
+            >Pick a model run to inspect its benchmark report and execution excerpt.</pre>
           </section>
 
           <section class="panel report-shell">
@@ -562,16 +674,39 @@
     <script>
     "use strict";
     const state = {
+      artifacts: [],
+      compare: null,
       configs: [],
+      forensics: null,
       jobs: [],
+      runtimeModels: [],
+      selectedRuntimeModelKey: null,
+      selectedArtifactId: null,
+      selectedCompareLeft: null,
+      selectedCompareRight: null,
       runs: [],
       selectedJobId: null,
       selectedRun: null,
+      variantSearch: null,
     };
 
     const els = {
+      artifactBody: document.querySelector("#artifact-body"),
+      artifactChart: document.querySelector("#artifact-chart"),
+      artifactMeta: document.querySelector("#artifact-meta"),
+      artifactTitle: document.querySelector("#artifact-title"),
+      artifactsList: document.querySelector("#artifacts-list"),
+      artifactsMeta: document.querySelector("#artifacts-meta"),
       casesPerCategory: document.querySelector("#cases-per-category"),
       categories: document.querySelector("#categories"),
+      compareBody: document.querySelector("#compare-body"),
+      compareLeft: document.querySelector("#compare-left"),
+      compareMeta: document.querySelector("#compare-meta"),
+      compareRight: document.querySelector("#compare-right"),
+      compareTitle: document.querySelector("#compare-title"),
+      forensicsBody: document.querySelector("#forensics-body"),
+      forensicsMeta: document.querySelector("#forensics-meta"),
+      forensicsTitle: document.querySelector("#forensics-title"),
       headlineStats: document.querySelector("#headline-stats"),
       jobsList: document.querySelector("#jobs-list"),
       jobsMeta: document.querySelector("#jobs-meta"),
@@ -592,8 +727,16 @@
       reportMeta: document.querySelector("#report-meta"),
       reportTitle: document.querySelector("#report-title"),
       runtimeName: document.querySelector("#runtime-name"),
+      runtimeModelBody: document.querySelector("#runtime-model-body"),
+      runtimeModelMeta: document.querySelector("#runtime-model-meta"),
+      runtimeModelTitle: document.querySelector("#runtime-model-title"),
+      runtimeModelsList: document.querySelector("#runtime-models-list"),
+      runtimeModelsMeta: document.querySelector("#runtime-models-meta"),
       runsList: document.querySelector("#runs-list"),
       runsMeta: document.querySelector("#runs-meta"),
+      variantBody: document.querySelector("#variant-body"),
+      variantMeta: document.querySelector("#variant-meta"),
+      variantTitle: document.querySelector("#variant-title"),
     };
 
     function statusClass(value) {
@@ -618,6 +761,91 @@
       return values.join(", ");
     }
 
+    function formatMetric(value, digits = 2) {
+      return typeof value === "number" && Number.isFinite(value)
+        ? value.toFixed(digits)
+        : "-";
+    }
+
+    function formatPercent(value) {
+      return typeof value === "number" && Number.isFinite(value)
+        ? `${value.toFixed(2)}%`
+        : "-";
+    }
+
+    function formatRuntimeProgress(modelRun) {
+      const parts = [];
+      if (
+        typeof modelRun?.progressCurrent === "number" &&
+        typeof modelRun?.progressTotal === "number"
+      ) {
+        parts.push(`${modelRun.progressCurrent}/${modelRun.progressTotal}`);
+      }
+      if (
+        typeof modelRun?.progressPercent === "number" &&
+        Number.isFinite(modelRun.progressPercent)
+      ) {
+        parts.push(`${modelRun.progressPercent.toFixed(0)}%`);
+      }
+      if (modelRun?.executionPhase) {
+        parts.push(modelRun.executionPhase);
+      }
+      if (parts.length > 0) {
+        return parts.join(" · ");
+      }
+      if (modelRun?.status === "completed") {
+        return "completed";
+      }
+      if (modelRun?.status === "running") {
+        return "running";
+      }
+      return "waiting for logs";
+    }
+
+    function formatSignedMetric(value, digits = 2) {
+      return typeof value === "number" && Number.isFinite(value)
+        ? `${value >= 0 ? "+" : ""}${value.toFixed(digits)}`
+        : "-";
+    }
+
+    function renderCompareControls() {
+      const options = state.runs
+        .map((run) => {
+          return `<option value="${run.name}">${run.name}</option>`;
+        })
+        .join("");
+      els.compareLeft.innerHTML = options;
+      els.compareRight.innerHTML = options;
+      if (state.selectedCompareLeft) {
+        els.compareLeft.value = state.selectedCompareLeft;
+      }
+      if (state.selectedCompareRight) {
+        els.compareRight.value = state.selectedCompareRight;
+      }
+    }
+
+    function ensureCompareSelection() {
+      const runNames = state.runs.map((run) => run.name);
+      if (runNames.length === 0) {
+        state.selectedCompareLeft = null;
+        state.selectedCompareRight = null;
+        renderCompareControls();
+        return;
+      }
+      if (!runNames.includes(state.selectedCompareLeft)) {
+        state.selectedCompareLeft = runNames[0];
+      }
+      if (
+        !runNames.includes(state.selectedCompareRight) ||
+        state.selectedCompareRight === state.selectedCompareLeft
+      ) {
+        state.selectedCompareRight =
+          runNames.find((name) => name !== state.selectedCompareLeft) ||
+          runNames[0];
+      }
+      renderCompareControls();
+    }
+
     async function fetchJson(path, options) {
       const response = await fetch(path, {
         headers: { "Content-Type": "application/json" },
@@ -631,21 +859,32 @@
     }
 
     function renderHeadline() {
-      if (state.runs.length === 0) {
+      if (state.runs.length === 0 && state.artifacts.length === 0) {
         els.headlineStats.innerHTML =
           '<div class="stat"><strong>No runs yet</strong><div class="tiny">Launch a preflight or benchmark.</div></div>';
         return;
       }
 
       const latest = state.runs[0];
-      const counts = latest.counts || {};
+      const counts = latest?.counts || {};
+      const improvedArtifacts = state.artifacts.filter(
+        (artifact) => artifact.outcome === "improved"
+      );
+      const bestArtifact = improvedArtifacts[0] || null;
       els.headlineStats.innerHTML = [
-        { label: "Latest Runtime", value: latest.name },
+        latest
+          ? { label: "Latest Runtime", value: latest.name }
+          : { label: "Latest Runtime", value: "-" },
         { label: "Completed", value: String(counts.completed ?? 0) },
         { label: "Improved", value: String(counts.improved ?? 0) },
-        { label: "Flat", value: String(counts.flat ?? 0) },
-        { label: "Regressed", value: String(counts.regressed ?? 0) },
-        { label: "Failed", value: String(counts.failed ?? 0) },
+        {
+          label: "Checked-In Gains",
+          value: String(improvedArtifacts.length),
+        },
+        {
+          label: "Best Checked-In Delta",
+          value: bestArtifact ? `${formatMetric(bestArtifact.deltaPp)}pp` : "-",
+        },
       ]
         .map(
           (item) =>
@@ -738,6 +977,271 @@
         .join("");
     }
 
+    function renderRuntimeModels() {
+      const selectedRunName = state.selectedRun?.name || null;
+      if (selectedRunName) {
+        const runningCount = state.runtimeModels.filter(
+          (modelRun) => modelRun.status === "running"
+        ).length;
+        els.runtimeModelsMeta.textContent = `${state.runtimeModels.length} model runs · ${runningCount} running`;
+      } else {
+        els.runtimeModelsMeta.textContent = "select a runtime";
+      }
+      if (!selectedRunName) {
+        els.runtimeModelsList.innerHTML =
+          '<div class="empty">Pick a runtime to inspect model-level results.</div>';
+        return;
+      }
+      if (state.runtimeModels.length === 0) {
+        els.runtimeModelsList.innerHTML =
+          '<div class="empty">No model summaries found for this runtime yet.</div>';
+        return;
+      }
+
+      els.runtimeModelsList.innerHTML = state.runtimeModels
+        .map((modelRun) => {
+          const modelKey = `${selectedRunName}::${modelRun.name}`;
+          const badgeValue =
+            modelRun.status === "completed"
+              ? modelRun.outcome
+              : modelRun.status;
+          return `
+              <article class="card">
+                <div class="card-top">
+                  <div class="card-title">
+                    <strong>${modelRun.modelName || modelRun.name}</strong>
+                    <span class="tiny">${modelRun.providerName || "-"} · ${modelRun.name}</span>
+                  </div>
+                  <span class="badge ${statusClass(badgeValue)}">${badgeValue}</span>
+                </div>
+                <div class="meta-grid">
+                  <div class="meta-item"><strong>Status</strong>${modelRun.status}</div>
+                  <div class="meta-item"><strong>Progress</strong>${formatRuntimeProgress(modelRun)}</div>
+                  <div class="meta-item"><strong>Scores</strong>${formatMetric(modelRun.baselineScore)} -> ${formatMetric(modelRun.ralphScore)}</div>
+                  <div class="meta-item"><strong>Delta</strong>${formatMetric(modelRun.deltaPp)} pp</div>
+                  <div class="meta-item"><strong>Cases</strong>${modelRun.casesPerCategory ?? "-"}</div>
+                  <div class="meta-item"><strong>Categories</strong>${safeJoin(modelRun.categories)}</div>
+                </div>
+                <div class="actions">
+                  <button class="ghost" type="button" data-runtime-model="${modelKey}">Inspect</button>
+                </div>
+              </article>
+            `;
+        })
+        .join("");
+    }
+
+    function renderCompare(payload) {
+      state.compare = payload || null;
+      if (!(payload?.leftRun && payload?.rightRun)) {
+        els.compareTitle.textContent = "pick two runtimes";
+        els.compareMeta.innerHTML = "";
+        els.compareBody.textContent =
+          "Pick two runtimes to compare model deltas and variants.";
+        return;
+      }
+
+      els.compareTitle.textContent = `${payload.leftRun.name} vs ${payload.rightRun.name}`;
+      els.compareMeta.innerHTML = [
+        { label: "Shared", value: String(payload.summary?.shared ?? 0) },
+        {
+          label: "Right Better",
+          value: String(payload.summary?.rightBetter ?? 0),
+        },
+        {
+          label: "Left Better",
+          value: String(payload.summary?.leftBetter ?? 0),
+        },
+        { label: "Right Only", value: String(payload.summary?.rightOnly ?? 0) },
+      ]
+        .map(
+          (item) =>
+            `<div class="meta-item"><strong>${item.label}</strong>${item.value}</div>`
+        )
+        .join("");
+
+      const lines = [];
+      for (const row of payload.rows || []) {
+        lines.push(
+          [
+            `${row.modelName || row.key} [${row.verdict}]`,
+            `left: ${row.left?.ralphVariant || "-"} ${formatSignedMetric(row.left?.deltaPp)} pp (${row.left?.outcome || "-"})`,
+            `right: ${row.right?.ralphVariant || "-"} ${formatSignedMetric(row.right?.deltaPp)} pp (${row.right?.outcome || "-"})`,
+            `shift: ${formatSignedMetric(row.deltaPpShift)} pp`,
+          ].join("\n")
+        );
+      }
+      if ((payload.leftOnly || []).length > 0) {
+        lines.push(
+          [
+            "[left only]",
+            ...payload.leftOnly.map(
+              (row) =>
+                `${row.id} · ${row.ralphVariant || "-"} · ${formatSignedMetric(row.deltaPp)} pp`
+            ),
+          ].join("\n")
+        );
+      }
+      if ((payload.rightOnly || []).length > 0) {
+        lines.push(
+          [
+            "[right only]",
+            ...payload.rightOnly.map(
+              (row) =>
+                `${row.id} · ${row.ralphVariant || "-"} · ${formatSignedMetric(row.deltaPp)} pp`
+            ),
+          ].join("\n")
+        );
+      }
+      els.compareBody.textContent = lines.length
+        ? lines.join("\n\n")
+        : "No overlapping model records were found.";
+    }
+
+    function renderForensics(payload) {
+      state.forensics = payload?.forensics || null;
+      if (!payload?.forensics) {
+        els.forensicsTitle.textContent = "select a runtime";
+        els.forensicsMeta.innerHTML = "";
+        els.forensicsBody.textContent =
+          "Pick a runtime to inspect timeout, schema, and missing-arg trends.";
+        return;
+      }
+
+      const forensics = payload.forensics;
+      els.forensicsTitle.textContent = forensics.runtimeName;
+      els.forensicsMeta.innerHTML = [
+        {
+          label: "Baseline Errors",
+          value: `${forensics.baselineErrorItems} / ${forensics.baselineTotalItems}`,
+        },
+        {
+          label: "RALPH Errors",
+          value: `${forensics.ralphErrorItems} / ${forensics.ralphTotalItems}`,
+        },
+        {
+          label: "Models Improved",
+          value: String(forensics.modelsWithImprovedErrors ?? 0),
+        },
+        {
+          label: "Models Regressed",
+          value: String(forensics.modelsWithRegressedErrors ?? 0),
+        },
+      ]
+        .map(
+          (item) =>
+            `<div class="meta-item"><strong>${item.label}</strong>${item.value}</div>`
+        )
+        .join("");
+
+      const bucketLines = (forensics.buckets || []).map((bucket) => {
+        return `${bucket.bucket}: baseline ${bucket.baselineCount}, ralph ${bucket.ralphCount}, delta ${formatSignedMetric(bucket.deltaCount, 0)}`;
+      });
+      const modelLines = (forensics.modelRuns || [])
+        .filter(
+          (modelRun) => modelRun.baselineErrorItems || modelRun.ralphErrorItems
+        )
+        .map((modelRun) => {
+          return `${modelRun.modelName || modelRun.name}: ${modelRun.dominantBucket || "no dominant bucket"} · baseline ${modelRun.baselineErrorItems}, ralph ${modelRun.ralphErrorItems}`;
+        });
+      const sections = [];
+      if (bucketLines.length > 0) {
+        sections.push(["[buckets]", ...bucketLines].join("\n"));
+      }
+      if (modelLines.length > 0) {
+        sections.push(["[models]", ...modelLines].join("\n"));
+      }
+      els.forensicsBody.textContent = sections.length
+        ? sections.join("\n\n")
+        : "No error forensics captured for this runtime yet.";
+    }
+
+    function renderVariantSearch(payload) {
+      state.variantSearch = payload || null;
+      if (!payload) {
+        els.variantTitle.textContent = "historical recommendations";
+        els.variantMeta.innerHTML = "";
+        els.variantBody.textContent =
+          "Loading variant leaderboard and next-try recommendations.";
+        return;
+      }
+
+      els.variantTitle.textContent = "historical recommendations";
+      els.variantMeta.innerHTML = [
+        { label: "Variants", value: String(payload.summary?.variants ?? 0) },
+        { label: "Models", value: String(payload.summary?.models ?? 0) },
+        {
+          label: "Top Variant",
+          value: payload.variants?.[0]
+            ? `${payload.variants[0].variant} (${formatSignedMetric(payload.variants[0].avgDeltaPp)} pp avg)`
+            : "-",
+        },
+        {
+          label: "Top Model",
+          value: payload.recommendations?.[0]?.modelName || "-",
+        },
+      ]
+        .map(
+          (item) =>
+            `<div class="meta-item"><strong>${item.label}</strong>${item.value}</div>`
+        )
+        .join("");
+
+      const variantLines = (payload.variants || [])
+        .slice(0, 6)
+        .map((variant) => {
+          return `${variant.modelKey} · ${variant.variant} · avg ${formatSignedMetric(variant.avgDeltaPp)} pp · ${variant.runsCount} run(s)`;
+        });
+      const recommendationLines = (payload.recommendations || [])
+        .slice(0, 8)
+        .map((item) => {
+          const nextText =
+            Array.isArray(item.nextVariantsToTry) &&
+            item.nextVariantsToTry.length > 0
+              ? item.nextVariantsToTry.join(", ")
+              : "promote / validate current best";
+          return `${item.modelName || "-"} [${item.stage}] best=${item.bestVariant || "-"} ${formatSignedMetric(item.bestDeltaPp)} pp next=${nextText}`;
+        });
+      els.variantBody.textContent = [
+        ["[variant leaderboard]", ...variantLines].join("\n"),
+        ["[next recommendations]", ...recommendationLines].join("\n"),
+      ].join("\n\n");
+    }
+
+    function renderArtifacts() {
+      els.artifactsMeta.textContent = `${state.artifacts.length} best claims`;
+      if (state.artifacts.length === 0) {
+        els.artifactsList.innerHTML =
+          '<div class="empty">No tracked artifacts found yet.</div>';
+        return;
+      }
+
+      els.artifactsList.innerHTML = state.artifacts
+        .map((artifact) => {
+          return `
+              <article class="card">
+                <div class="card-top">
+                  <div class="card-title">
+                    <strong>${artifact.modelName || artifact.claimName}</strong>
+                    <span class="tiny">${artifact.providerName || artifact.experimentName} · ${artifact.claimName}</span>
+                  </div>
+                  <span class="badge ${statusClass(artifact.outcome)}">${artifact.outcome}</span>
+                </div>
+                <div class="meta-grid">
+                  <div class="meta-item"><strong>Cases / Category</strong>${artifact.casesPerCategory ?? "-"}</div>
+                  <div class="meta-item"><strong>Delta</strong>${formatMetric(artifact.deltaPp)} pp</div>
+                  <div class="meta-item"><strong>Baseline</strong>${formatMetric(artifact.baselineScore)}</div>
+                  <div class="meta-item"><strong>RALPH</strong>${formatMetric(artifact.ralphScore)}</div>
+                </div>
+                <div class="actions">
+                  <button class="ghost" type="button" data-artifact="${artifact.id}">Inspect</button>
+                </div>
+              </article>
+            `;
+        })
+        .join("");
+    }
+
     function renderReport(run) {
       state.selectedRun = run || null;
       if (!run) {
@@ -795,6 +1299,115 @@
       els.logsBody.textContent = sections.join("\n\n");
     }
 
+    function renderArtifact(detail) {
+      if (!detail?.artifact) {
+        els.artifactTitle.textContent = "select an artifact";
+        els.artifactMeta.innerHTML = "";
+        els.artifactChart.textContent =
+          "Pick a checked-in artifact to inspect its chart.";
+        els.artifactBody.textContent =
+          "Pick a checked-in artifact to inspect its benchmark report.";
+        return;
+      }
+
+      state.selectedArtifactId = detail.artifact.id;
+      const artifact = detail.artifact;
+      els.artifactTitle.textContent = artifact.modelName || artifact.claimName;
+      els.artifactMeta.innerHTML = [
+        { label: "Provider", value: artifact.providerName || "-" },
+        { label: "Experiment", value: artifact.experimentName },
+        { label: "Cases", value: String(artifact.casesPerCategory ?? "-") },
+        {
+          label: "Scores",
+          value: `${formatMetric(artifact.baselineScore)} -> ${formatMetric(artifact.ralphScore)}`,
+        },
+        {
+          label: "Delta",
+          value: `${formatMetric(artifact.deltaPp)} pp / ${formatPercent(artifact.relativeDeltaPercent)}`,
+        },
+        {
+          label: "Evidence",
+          value: artifact.summaryRelativePath,
+        },
+      ]
+        .map(
+          (item) =>
+            `<div class="meta-item"><strong>${item.label}</strong>${item.value}</div>`
+        )
+        .join("");
+      if (detail.chartSvg) {
+        els.artifactChart.innerHTML = detail.chartSvg;
+      } else {
+        els.artifactChart.textContent = "No chart found for this artifact.";
+      }
+      els.artifactBody.textContent =
+        detail.reportMarkdown || "benchmark_report.md not found";
+    }
+
+    function renderRuntimeModel(detail) {
+      if (!detail?.modelRun) {
+        els.runtimeModelTitle.textContent = "select a model run";
+        els.runtimeModelMeta.innerHTML = "";
+        els.runtimeModelBody.textContent =
+          "Pick a model run to inspect its benchmark report and execution excerpt.";
+        return;
+      }
+
+      const modelRun = detail.modelRun;
+      state.selectedRuntimeModelKey = `${modelRun.runtimeName}::${modelRun.name}`;
+      els.runtimeModelTitle.textContent = modelRun.modelName || modelRun.name;
+      els.runtimeModelMeta.innerHTML = [
+        { label: "Provider", value: modelRun.providerName || "-" },
+        { label: "Runtime", value: modelRun.runtimeName },
+        { label: "Status", value: modelRun.status },
+        { label: "Progress", value: formatRuntimeProgress(modelRun) },
+        {
+          label: "Forensics",
+          value: detail.forensics
+            ? `${detail.forensics.baselineErrorItems} -> ${detail.forensics.ralphErrorItems}`
+            : "-",
+        },
+        {
+          label: "Scores",
+          value: `${formatMetric(modelRun.baselineScore)} -> ${formatMetric(modelRun.ralphScore)}`,
+        },
+        {
+          label: "Delta",
+          value: `${formatMetric(modelRun.deltaPp)} pp / ${formatPercent(modelRun.relativeDeltaPercent)}`,
+        },
+      ]
+        .map(
+          (item) =>
+            `<div class="meta-item"><strong>${item.label}</strong>${item.value}</div>`
+        )
+        .join("");
+      const sections = [];
+      if (detail.reportMarkdown) {
+        sections.push(detail.reportMarkdown);
+      }
+      if (detail.stdout) {
+        sections.push(["[stdout tail]", detail.stdout].join("\n"));
+      }
+      if (detail.stderr) {
+        sections.push(["[stderr tail]", detail.stderr].join("\n"));
+      }
+      if (detail.forensics) {
+        const bucketLines = (detail.forensics.buckets || []).map((bucket) => {
+          return `${bucket.bucket}: ${bucket.baselineCount} -> ${bucket.ralphCount}`;
+        });
+        sections.push(
+          [
+            "[forensics]",
+            `dominant_bucket=${detail.forensics.dominantBucket || "-"}`,
+            ...bucketLines,
+          ].join("\n")
+        );
+      }
+      els.runtimeModelBody.textContent = sections.length
+        ? sections.join("\n\n")
+        : "No model-run detail found.";
+    }
+
     async function loadConfigs() {
       const payload = await fetchJson("/v1/benchlab/configs");
       state.configs = payload.configs || [];
@@ -812,14 +1425,44 @@
       state.runs = payload.runs || [];
       renderRuns();
       renderHeadline();
+      ensureCompareSelection();
 
       if (state.selectedRun) {
         const matched = state.runs.find(
           (run) => run.name === state.selectedRun.name
         );
-        renderReport(matched || state.runs[0] || null);
+        const selectedRun = matched || state.runs[0] || null;
+        renderReport(selectedRun);
+        await loadRuntimeModels(selectedRun?.name || null);
+        await loadForensics(selectedRun?.name || null);
       } else {
-        renderReport(state.runs[0] || null);
+        const selectedRun = state.runs[0] || null;
+        renderReport(selectedRun);
+        await loadRuntimeModels(selectedRun?.name || null);
+        await loadForensics(selectedRun?.name || null);
+      }
+      await loadCompare(state.selectedCompareLeft, state.selectedCompareRight);
+    }
+
+    async function loadArtifacts() {
+      const payload = await fetchJson("/v1/benchlab/artifacts/best");
+      state.artifacts = payload.artifacts || [];
+      renderArtifacts();
+      renderHeadline();
+
+      if (state.selectedArtifactId) {
+        const matched = state.artifacts.find(
+          (artifact) => artifact.id === state.selectedArtifactId
+        );
+        if (matched) {
+          await loadArtifactDetail(matched.id);
+          return;
+        }
+      }
+      if (state.artifacts[0]) {
+        await loadArtifactDetail(state.artifacts[0].id);
+      } else {
+        renderArtifact(null);
       }
     }
 
@@ -830,9 +1473,88 @@
       renderLogs(payload.logs, jobId);
     }
 
+    async function loadArtifactDetail(artifactId) {
+      const payload = await fetchJson(
+        `/v1/benchlab/artifacts/${encodeURIComponent(artifactId)}`
+      );
+      renderArtifact(payload);
+    }
+
+    async function loadCompare(leftRunName, rightRunName) {
+      if (!(leftRunName && rightRunName)) {
+        renderCompare(null);
+        return;
+      }
+      const payload = await fetchJson(
+        `/v1/benchlab/compare?left=${encodeURIComponent(leftRunName)}&right=${encodeURIComponent(rightRunName)}`
+      );
+      renderCompare(payload);
+    }
+
+    async function loadForensics(runName) {
+      if (!runName) {
+        renderForensics(null);
+        return;
+      }
+      const payload = await fetchJson(
+        `/v1/benchlab/runs/${encodeURIComponent(runName)}/forensics`
+      );
+      renderForensics(payload);
+    }
+
+    async function loadRuntimeModels(runName) {
+      if (!runName) {
+        state.runtimeModels = [];
+        renderRuntimeModels();
+        renderRuntimeModel(null);
+        return;
+      }
+
+      const payload = await fetchJson(
+        `/v1/benchlab/runs/${encodeURIComponent(runName)}/models`
+      );
+      state.runtimeModels = payload.modelRuns || [];
+      renderRuntimeModels();
+
+      if (state.selectedRuntimeModelKey) {
+        const matched = state.runtimeModels.find(
+          (modelRun) =>
+            `${runName}::${modelRun.name}` === state.selectedRuntimeModelKey
+        );
+        if (matched) {
+          await loadRuntimeModelDetail(runName, matched.name);
+          return;
+        }
+      }
+
+      if (state.runtimeModels[0]) {
+        await loadRuntimeModelDetail(runName, state.runtimeModels[0].name);
+      } else {
+        renderRuntimeModel(null);
+      }
+    }
+
+    async function loadRuntimeModelDetail(runName, modelRunName) {
+      const payload = await fetchJson(
+        `/v1/benchlab/runs/${encodeURIComponent(runName)}/models/${encodeURIComponent(modelRunName)}`
+      );
+      renderRuntimeModel(payload);
+    }
+
+    async function loadVariantSearch() {
+      const payload = await fetchJson("/v1/benchlab/leaderboards/variants");
+      renderVariantSearch(payload);
+    }
+
     async function refreshAll() {
       try {
-        await Promise.all([loadConfigs(), loadJobs(), loadRuns()]);
+        await Promise.all([
+          loadConfigs(),
+          loadJobs(),
+          loadArtifacts(),
+          loadVariantSearch(),
+        ]);
+        await loadRuns();
         if (state.selectedJobId) {
           const matchedJob = state.jobs.find(
             (job) => job.id === state.selectedJobId
@@ -949,6 +1671,53 @@
       }
       const run = state.runs.find((item) => item.name === button.dataset.run);
       renderReport(run || null);
+      loadRuntimeModels(run?.name || null);
+      loadForensics(run?.name || null);
+    });
+
+    els.compareLeft.addEventListener("change", async () => {
+      state.selectedCompareLeft = els.compareLeft.value || null;
+      if (state.selectedCompareLeft === state.selectedCompareRight) {
+        const alternate = state.runs.find(
+          (run) => run.name !== state.selectedCompareLeft
+        );
+        state.selectedCompareRight =
+          alternate?.name || state.selectedCompareLeft;
+        renderCompareControls();
+      }
+      await loadCompare(state.selectedCompareLeft, state.selectedCompareRight);
+    });
+
+    els.compareRight.addEventListener("change", async () => {
+      state.selectedCompareRight = els.compareRight.value || null;
+      if (state.selectedCompareLeft === state.selectedCompareRight) {
+        const alternate = state.runs.find(
+          (run) => run.name !== state.selectedCompareRight
+        );
+        state.selectedCompareLeft =
+          alternate?.name || state.selectedCompareRight;
+        renderCompareControls();
+      }
+      await loadCompare(state.selectedCompareLeft, state.selectedCompareRight);
+    });
+
+    els.artifactsList.addEventListener("click", async (event) => {
+      const button = event.target.closest("button");
+      if (!button?.dataset.artifact) {
+        return;
+      }
+      await loadArtifactDetail(button.dataset.artifact);
+    });
+
+    els.runtimeModelsList.addEventListener("click", async (event) => {
+      const button = event.target.closest("button");
+      if (!(button?.dataset.runtimeModel && state.selectedRun?.name)) {
+        return;
+      }
+      const modelRunName = button.dataset.runtimeModel.slice(
+        `${state.selectedRun.name}::`.length
+      );
+      await loadRuntimeModelDetail(state.selectedRun.name, modelRunName);
     });
 
     refreshAll();

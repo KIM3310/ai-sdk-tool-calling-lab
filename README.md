@@ -40,6 +40,8 @@ Note: there is no separate formal EOL announcement in releases/changelog for `v1
 - The benchmark folders under `experiments/` are separate research artifacts from the published package.
 - `experiments/grok-prompt-bfcl-ralph` measures **Grok BFCL prompt-mode function calling** with a RALPH loop prompt, not xAI native tools API performance.
 - `experiments/openai-compatible-prompt-bfcl-ralph` generalizes the same RALPH pattern to OpenAI-compatible prompt-mode models that may not support native tools.
+- `experiments/gemini-cli-prompt-bfcl-ralph` runs the same BFCL prompt-mode baseline vs RALPH comparison through the official `gemini` CLI.
+- `experiments/claude-cli-prompt-bfcl-ralph` does the same through the official `claude` CLI when Claude Code access is available.
 - `experiments/kiro-cli-prompt-bfcl-ralph` applies the same BFCL prompt-mode baseline vs RALPH comparison through `kiro-cli chat`.
 - `experiments/prompt-bfcl-ralph-matrix` orchestrates many such runs and classifies models into improved / flat / regressed / failed.
 - Keep the package, experiments, and operator tooling surfaces separate when describing results from this repo.
@@ -65,9 +67,15 @@ Only checked-in BFCL prompt-mode artifacts are listed here.
 | Model | Benchmark | Baseline | RALPH | Delta (pp) | Relative delta |
 |---|---|---:|---:|---:|---:|
 | `grok-4-latest` | BFCL v4 prompt-mode, 3 cases/category | 7.50 | 8.33 | +0.83 | +11.1% |
-| `llama3.2:latest` | BFCL v4 prompt-mode, 20 cases/category | 7.50 | 7.62 | +0.12 | +1.6% |
+| `llama3.1:8b` | BFCL v4 prompt-mode, 20 cases/category, schema-lock RALPH | 7.67 | 7.75 | +0.08 | +1.04% |
+| `llama3.2:latest` | BFCL v4 prompt-mode, 20 cases/category, schema-lock RALPH | 7.50 | 7.62 | +0.12 | +1.60% |
+| `qwen3.5:4b` | BFCL v4 prompt-mode, 10 cases/category, minimal RALPH | 6.08 | 7.33 | +1.25 | +20.56% |
 
 Full evidence, CSVs, markdown reports, and charts: `docs/TOOL_CALLING_GAINS.md`
+
+Recent non-gain snapshot:
+- `gemini-cli-2-5-flash-lite` with `minimal` RALPH (`3` cases/category): `8.33 -> 8.33`, `flat`
+- Evidence: `experiments/gemini-cli-prompt-bfcl-ralph/artifacts/claim-gemini-cli-2-5-flash-lite-3-minimal/`
 
 ## Hiring Packet
 
@@ -231,6 +239,12 @@ What it does:
 - Launch `preflight` or `benchmark` jobs without shelling into the matrix runner manually.
 - List model config files such as `models.ollama.local.json` and `models.zero-cost.local.json`.
 - Track in-memory jobs, inspect runtime summaries, and read `matrix_report.md`.
+- Drill into `runtime/runs/*` model summaries to inspect per-model baseline vs RALPH scores.
+- Surface live per-model execution progress (`n/N`, `%`, phase) while a runtime is still generating.
+- Compare two runtimes side-by-side to see which variant or model batch actually moved the delta.
+- Aggregate failure forensics across a runtime to spot timeout, schema, tool-selection, and missing-arg patterns.
+- Build historical variant leaderboards and next-try recommendations from completed runtime records.
+- Browse checked-in benchmark artifacts and a deduped best-claim-per-model view from the same UI.
 - Tail per-job `stdout/stderr` logs from the browser.
 
 Key endpoints:
@@ -241,8 +255,16 @@ Key endpoints:
 - `POST /v1/benchlab/jobs`
 - `POST /v1/benchlab/jobs/:id/cancel`
 - `GET /v1/benchlab/jobs/:id/logs`
+- `GET /v1/benchlab/artifacts`
+- `GET /v1/benchlab/artifacts/best`
+- `GET /v1/benchlab/artifacts/:id`
+- `GET /v1/benchlab/compare?left=<runtime>&right=<runtime>`
+- `GET /v1/benchlab/leaderboards/variants`
 - `GET /v1/benchlab/runs`
 - `GET /v1/benchlab/runs/:name`
+- `GET /v1/benchlab/runs/:name/forensics`
+- `GET /v1/benchlab/runs/:name/models`
+- `GET /v1/benchlab/runs/:name/models/:modelRunName`
 
 Google-only hackathon environment bootstrap (interactive; values only):
 

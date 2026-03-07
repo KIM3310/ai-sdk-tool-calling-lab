@@ -94,6 +94,154 @@ interface BenchLabRuntimeSummary {
   updatedAt: string | null;
 }
 
+interface BenchLabRuntimeModelSummary {
+  baselineScore: number | null;
+  casesPerCategory: number | null;
+  categories: string[];
+  deltaPp: number | null;
+  executionPhase: string | null;
+  modelName: string | null;
+  name: string;
+  outcome: BenchLabArtifactOutcome;
+  progressCurrent: number | null;
+  progressPercent: number | null;
+  progressTotal: number | null;
+  providerName: string | null;
+  ralphScore: number | null;
+  relativeDeltaPercent: number | null;
+  reportRelativePath: string | null;
+  runtimeName: string;
+  runtimeRoot: string;
+  status: "completed" | "pending" | "running";
+  summaryRelativePath: string | null;
+  updatedAt: string | null;
+}
+
+interface BenchLabForensicsBucketSummary {
+  baselineCount: number;
+  bucket: string;
+  deltaCount: number;
+  ralphCount: number;
+  sampleIds: string[];
+}
+
+interface BenchLabForensicsModelSummary {
+  baselineErrorItems: number;
+  baselineErrorRatePercent: number;
+  baselineTotalItems: number;
+  buckets: BenchLabForensicsBucketSummary[];
+  deltaErrorItems: number;
+  dominantBucket: string | null;
+  modelName: string | null;
+  name: string;
+  outcome: BenchLabArtifactOutcome;
+  providerName: string | null;
+  ralphErrorItems: number;
+  ralphErrorRatePercent: number;
+  ralphTotalItems: number;
+  runtimeName: string;
+}
+
+interface BenchLabRuntimeRecordSummary {
+  casesPerCategory: number | null;
+  categories: string[];
+  endedAtUtc: string | null;
+  errorMessage: string | null;
+  id: string;
+  kind: string | null;
+  label: string | null;
+  modelName: string | null;
+  outcome: string;
+  overallBaseline: number | null;
+  overallDeltaPp: number | null;
+  overallRalph: number | null;
+  overallRelativeDeltaPercent: number | null;
+  providerName: string | null;
+  ralphVariant: string | null;
+  runtimeName: string;
+  runtimeRoot: string;
+  salvaged: boolean;
+  startedAtUtc: string | null;
+  status: string;
+  updatedAt: string | null;
+}
+
+interface BenchLabRuntimeForensicsSummary {
+  baselineErrorItems: number;
+  baselineErrorRatePercent: number;
+  baselineTotalItems: number;
+  buckets: BenchLabForensicsBucketSummary[];
+  modelRuns: BenchLabForensicsModelSummary[];
+  modelsWithErrors: number;
+  modelsWithImprovedErrors: number;
+  modelsWithRegressedErrors: number;
+  ralphErrorItems: number;
+  ralphErrorRatePercent: number;
+  ralphTotalItems: number;
+  runtimeName: string;
+  updatedAt: string | null;
+}
+
+interface BenchLabSuggestedModelEntry {
+  id: string;
+  kind: string | null;
+  model_name: string;
+  provider_name: string | null;
+  ralph_variant: string;
+}
+
+interface BenchLabVariantLeaderboardEntry {
+  avgDeltaPp: number;
+  bestDeltaPp: number;
+  id: string;
+  improvedCount: number;
+  lastSeenAt: string | null;
+  modelKey: string;
+  modelsCount: number;
+  runsCount: number;
+  successRatePercent: number;
+  variant: string;
+  worstDeltaPp: number;
+}
+
+interface BenchLabVariantRecommendation {
+  bestCasesPerCategory: number | null;
+  bestDeltaPp: number | null;
+  bestVariant: string | null;
+  dominantBucket: string | null;
+  kind: string | null;
+  modelName: string | null;
+  nextVariantsToTry: string[];
+  providerName: string | null;
+  recommendedCasesPerCategory: number;
+  stage: string;
+  suggestedModelEntry: BenchLabSuggestedModelEntry | null;
+  testedVariants: string[];
+}
+
+type BenchLabArtifactOutcome = "improved" | "flat" | "regressed" | "unknown";
+
+interface BenchLabArtifactSummary {
+  artifactRoot: string;
+  baselineScore: number | null;
+  casesPerCategory: number | null;
+  categories: string[];
+  chartRelativePath: string | null;
+  claimName: string;
+  deltaPp: number | null;
+  errorForensicsRelativePath: string | null;
+  experimentName: string;
+  id: string;
+  modelName: string | null;
+  outcome: BenchLabArtifactOutcome;
+  providerName: string | null;
+  ralphScore: number | null;
+  relativeDeltaPercent: number | null;
+  reportRelativePath: string | null;
+  summaryRelativePath: string;
+  updatedAt: string | null;
+}
+
 const HTML_CONTENT_TYPE = "text/html; charset=utf-8";
 const JSON_CONTENT_TYPE = "application/json; charset=utf-8";
 const DEFAULT_BODY_LIMIT_BYTES = 1_048_576;
@@ -104,6 +252,16 @@ const DEFAULT_MATRIX_RUNNER_RELATIVE_PATH = join(
 );
 const DEFAULT_MODELS_FILE_NAME = "models.ollama.local.json";
 const DEFAULT_RUNTIME_PREFIX = "runtime-service";
+const KNOWN_RALPH_VARIANTS = [
+  "default",
+  "minimal",
+  "coverage",
+  "schema-lock",
+  "parallel-safe",
+  "call-count",
+  "compact",
+  "strict",
+];
 
 class HttpError extends Error {
   readonly statusCode: number;
@@ -272,6 +430,1248 @@ function readJsonIfExists(path: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function toRepoRelativePath(repoRoot: string, path: string): string {
+  return relative(repoRoot, path).split(sep).join("/");
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function computeRelativeDeltaPercent(
+  baseline: number | null,
+  deltaPp: number | null
+): number | null {
+  if (baseline === null || deltaPp === null || baseline === 0) {
+    return null;
+  }
+  return Number((((deltaPp / baseline) * 100) as number).toFixed(4));
+}
+
+function determineArtifactOutcome(
+  deltaPp: number | null
+): BenchLabArtifactOutcome {
+  if (deltaPp === null) {
+    return "unknown";
+  }
+  if (deltaPp > 0) {
+    return "improved";
+  }
+  if (deltaPp < 0) {
+    return "regressed";
+  }
+  return "flat";
+}
+
+function parseBenchmarkReportField(
+  markdown: string | null,
+  fieldName: string
+): string | null {
+  if (!markdown) {
+    return null;
+  }
+  const escaped = fieldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = markdown.match(
+    new RegExp(`^- ${escaped}: \`([^\\n]+)\`$`, "m")
+  );
+  if (!match) {
+    return null;
+  }
+  return match[1]?.trim() || null;
+}
+
+function readArtifactSummary(
+  repoRoot: string,
+  experimentName: string,
+  artifactRoot: string
+): BenchLabArtifactSummary | null {
+  const summaryPath = join(artifactRoot, "summary.json");
+  const reportPath = join(artifactRoot, "benchmark_report.md");
+  const errorForensicsPath = join(artifactRoot, "error_forensics.json");
+  const summary = readJsonIfExists(summaryPath);
+  if (!summary) {
+    return null;
+  }
+
+  const metrics =
+    summary.metrics_percent_point &&
+    typeof summary.metrics_percent_point === "object"
+      ? (summary.metrics_percent_point as Record<string, unknown>)
+      : null;
+  const overall =
+    metrics?.["Overall Acc"] && typeof metrics["Overall Acc"] === "object"
+      ? (metrics["Overall Acc"] as Record<string, unknown>)
+      : null;
+  const baselineScore = toFiniteNumber(overall?.baseline);
+  const ralphScore = toFiniteNumber(overall?.ralph);
+  const deltaPp = toFiniteNumber(overall?.delta);
+  const reportMarkdown = readTextIfExists(reportPath);
+  const chartFile = readdirSync(artifactRoot, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && extname(entry.name) === ".svg")
+    .map((entry) => entry.name)
+    .sort((left, right) => left.localeCompare(right))[0];
+
+  let updatedAt: string | null = null;
+  try {
+    updatedAt = statSync(summaryPath).mtime.toISOString();
+  } catch {
+    updatedAt = null;
+  }
+
+  return {
+    id: `${experimentName}::${relative(join(repoRoot, "experiments", experimentName, "artifacts"), artifactRoot)}`,
+    experimentName,
+    claimName: relative(
+      join(repoRoot, "experiments", experimentName, "artifacts"),
+      artifactRoot
+    ),
+    artifactRoot,
+    providerName: parseBenchmarkReportField(reportMarkdown, "Provider"),
+    modelName: parseBenchmarkReportField(reportMarkdown, "Model"),
+    categories: Array.isArray(summary.categories)
+      ? summary.categories.filter(
+          (item): item is string => typeof item === "string"
+        )
+      : [],
+    casesPerCategory:
+      typeof summary.cases_per_category === "number"
+        ? summary.cases_per_category
+        : null,
+    baselineScore,
+    ralphScore,
+    deltaPp,
+    relativeDeltaPercent: computeRelativeDeltaPercent(baselineScore, deltaPp),
+    outcome: determineArtifactOutcome(deltaPp),
+    updatedAt,
+    summaryRelativePath: toRepoRelativePath(repoRoot, summaryPath),
+    reportRelativePath: existsSync(reportPath)
+      ? toRepoRelativePath(repoRoot, reportPath)
+      : null,
+    chartRelativePath:
+      typeof chartFile === "string"
+        ? toRepoRelativePath(repoRoot, join(artifactRoot, chartFile))
+        : null,
+    errorForensicsRelativePath: existsSync(errorForensicsPath)
+      ? toRepoRelativePath(repoRoot, errorForensicsPath)
+      : null,
+  };
+}
+
+function listArtifactSummaries(repoRoot: string): BenchLabArtifactSummary[] {
+  const experimentsRoot = join(repoRoot, "experiments");
+  if (!existsSync(experimentsRoot)) {
+    return [];
+  }
+
+  const artifacts: BenchLabArtifactSummary[] = [];
+  for (const experimentEntry of readdirSync(experimentsRoot, {
+    withFileTypes: true,
+  })) {
+    if (!experimentEntry.isDirectory()) {
+      continue;
+    }
+    const artifactParent = join(
+      experimentsRoot,
+      experimentEntry.name,
+      "artifacts"
+    );
+    if (!existsSync(artifactParent)) {
+      continue;
+    }
+    for (const artifactEntry of readdirSync(artifactParent, {
+      withFileTypes: true,
+    })) {
+      if (!artifactEntry.isDirectory()) {
+        continue;
+      }
+      const artifactRoot = join(artifactParent, artifactEntry.name);
+      const parsed = readArtifactSummary(
+        repoRoot,
+        experimentEntry.name,
+        artifactRoot
+      );
+      if (parsed) {
+        artifacts.push(parsed);
+      }
+    }
+  }
+
+  return artifacts.sort(compareArtifactSummaries);
+}
+
+function compareArtifactSummaries(
+  left: BenchLabArtifactSummary,
+  right: BenchLabArtifactSummary
+): number {
+  const outcomeRank: Record<BenchLabArtifactOutcome, number> = {
+    improved: 0,
+    flat: 1,
+    regressed: 2,
+    unknown: 3,
+  };
+  const leftRank = outcomeRank[left.outcome];
+  const rightRank = outcomeRank[right.outcome];
+  if (leftRank !== rightRank) {
+    return leftRank - rightRank;
+  }
+  const leftDelta = left.deltaPp ?? Number.NEGATIVE_INFINITY;
+  const rightDelta = right.deltaPp ?? Number.NEGATIVE_INFINITY;
+  if (leftDelta !== rightDelta) {
+    return rightDelta - leftDelta;
+  }
+  const leftTs = left.updatedAt ? Date.parse(left.updatedAt) : 0;
+  const rightTs = right.updatedAt ? Date.parse(right.updatedAt) : 0;
+  return rightTs - leftTs;
+}
+
+function listBestArtifactSummaries(
+  repoRoot: string
+): BenchLabArtifactSummary[] {
+  const bestByModel = new Map<string, BenchLabArtifactSummary>();
+  for (const artifact of listArtifactSummaries(repoRoot)) {
+    const modelKey = `${artifact.providerName ?? "unknown"}::${artifact.modelName ?? artifact.claimName}`;
+    const current = bestByModel.get(modelKey);
+    if (!current || compareArtifactSummaries(artifact, current) < 0) {
+      bestByModel.set(modelKey, artifact);
+    }
+  }
+  return [...bestByModel.values()].sort(compareArtifactSummaries);
+}
+
+function readArtifactDetail(
+  repoRoot: string,
+  artifact: BenchLabArtifactSummary
+): JsonObject {
+  const summaryPath = join(repoRoot, artifact.summaryRelativePath);
+  const reportPath = artifact.reportRelativePath
+    ? join(repoRoot, artifact.reportRelativePath)
+    : null;
+  const chartPath = artifact.chartRelativePath
+    ? join(repoRoot, artifact.chartRelativePath)
+    : null;
+
+  return {
+    artifact,
+    errorForensicsJson: artifact.errorForensicsRelativePath
+      ? readJsonIfExists(join(repoRoot, artifact.errorForensicsRelativePath))
+      : null,
+    summary: readJsonIfExists(summaryPath),
+    reportMarkdown: reportPath ? readTextIfExists(reportPath) : null,
+    chartSvg: chartPath ? readTextIfExists(chartPath) : null,
+  };
+}
+
+function slugify(value: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-");
+  return normalized.replace(/^-+|-+$/g, "") || "model";
+}
+
+function readRuntimeRecordSummaries(
+  repoRoot: string,
+  runtimeName: string,
+  runtimeRoot: string
+): BenchLabRuntimeRecordSummary[] {
+  const summary = readJsonIfExists(join(runtimeRoot, "matrix_summary.json"));
+  if (!(summary && Array.isArray(summary.records))) {
+    return [];
+  }
+
+  const categories = Array.isArray(summary.categories)
+    ? summary.categories.filter(
+        (item): item is string => typeof item === "string"
+      )
+    : [];
+  const casesPerCategory =
+    typeof summary.cases_per_category === "number"
+      ? summary.cases_per_category
+      : null;
+
+  return summary.records.flatMap((rawRecord) => {
+    if (!rawRecord || typeof rawRecord !== "object") {
+      return [];
+    }
+    const record = rawRecord as Record<string, unknown>;
+    const recordId = toOptionalString(record.id);
+    if (!recordId) {
+      return [];
+    }
+
+    const recordRuntimeRoot =
+      typeof record.runtime_root === "string"
+        ? join(repoRoot, record.runtime_root)
+        : join(runtimeRoot, "runs", slugify(recordId));
+
+    let updatedAt: string | null = null;
+    try {
+      updatedAt = statSync(recordRuntimeRoot).mtime.toISOString();
+    } catch {
+      updatedAt = null;
+    }
+
+    return [
+      {
+        casesPerCategory,
+        categories,
+        endedAtUtc: toOptionalString(record.ended_at_utc),
+        errorMessage: toOptionalString(record.error_message),
+        id: recordId,
+        kind: toOptionalString(record.kind),
+        label: toOptionalString(record.label),
+        modelName: toOptionalString(record.model_name),
+        outcome: toOptionalString(record.outcome) ?? "unknown",
+        overallBaseline: toFiniteNumber(record.overall_baseline),
+        overallDeltaPp: toFiniteNumber(record.overall_delta_pp),
+        overallRalph: toFiniteNumber(record.overall_ralph),
+        overallRelativeDeltaPercent: toFiniteNumber(
+          record.overall_relative_delta_percent
+        ),
+        providerName: toOptionalString(record.provider_name),
+        ralphVariant: toOptionalString(record.ralph_variant) ?? "default",
+        runtimeName,
+        runtimeRoot: recordRuntimeRoot,
+        salvaged: record.salvaged === true,
+        startedAtUtc: toOptionalString(record.started_at_utc),
+        status: toOptionalString(record.status) ?? "unknown",
+        updatedAt,
+      } satisfies BenchLabRuntimeRecordSummary,
+    ];
+  });
+}
+
+function readAllRuntimeRecordSummaries(
+  repoRoot: string,
+  matrixRoot: string
+): BenchLabRuntimeRecordSummary[] {
+  return listRuntimeRoots(matrixRoot).flatMap((runtimeRoot) => {
+    const runtimeName =
+      relative(resolve(runtimeRoot, ".."), runtimeRoot) || runtimeRoot;
+    return readRuntimeRecordSummaries(repoRoot, runtimeName, runtimeRoot);
+  });
+}
+
+function classifyForensicsBucket(reason: string | null): string {
+  const normalized = (reason ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return "other";
+  }
+  if (normalized.includes("timeout")) {
+    return "timeout";
+  }
+  if (
+    normalized.includes("missing") ||
+    normalized.includes("required") ||
+    normalized.includes("coverage")
+  ) {
+    return "missing_args";
+  }
+  if (
+    normalized.includes("schema") ||
+    normalized.includes("type") ||
+    normalized.includes("enum") ||
+    normalized.includes("json") ||
+    normalized.includes("parse") ||
+    normalized.includes("validation")
+  ) {
+    return "schema_mismatch";
+  }
+  if (
+    normalized.includes("tool") ||
+    normalized.includes("function") ||
+    normalized.includes("registry") ||
+    normalized.includes("halluc")
+  ) {
+    return "tool_selection";
+  }
+  if (
+    normalized.includes("parallel") ||
+    normalized.includes("call-count") ||
+    normalized.includes("planning") ||
+    normalized.includes("dropped")
+  ) {
+    return "planning";
+  }
+  if (
+    normalized.includes("auth") ||
+    normalized.includes("permission") ||
+    normalized.includes("quota") ||
+    normalized.includes("rate limit") ||
+    normalized.includes("api key")
+  ) {
+    return "provider_error";
+  }
+  if (normalized.includes("inference") || normalized.includes("model")) {
+    return "inference_error";
+  }
+  return "other";
+}
+
+function compareBucketSummaries(
+  left: BenchLabForensicsBucketSummary,
+  right: BenchLabForensicsBucketSummary
+): number {
+  const leftMagnitude = Math.abs(left.deltaCount);
+  const rightMagnitude = Math.abs(right.deltaCount);
+  if (leftMagnitude !== rightMagnitude) {
+    return rightMagnitude - leftMagnitude;
+  }
+  const leftTotal = left.baselineCount + left.ralphCount;
+  const rightTotal = right.baselineCount + right.ralphCount;
+  if (leftTotal !== rightTotal) {
+    return rightTotal - leftTotal;
+  }
+  return left.bucket.localeCompare(right.bucket);
+}
+
+function compareRuntimeRecordsByQuality(
+  left: BenchLabRuntimeRecordSummary,
+  right: BenchLabRuntimeRecordSummary
+): number {
+  const leftDelta = left.overallDeltaPp ?? Number.NEGATIVE_INFINITY;
+  const rightDelta = right.overallDeltaPp ?? Number.NEGATIVE_INFINITY;
+  if (leftDelta !== rightDelta) {
+    return rightDelta - leftDelta;
+  }
+  const leftCases = left.casesPerCategory ?? 0;
+  const rightCases = right.casesPerCategory ?? 0;
+  if (leftCases !== rightCases) {
+    return rightCases - leftCases;
+  }
+  const leftUpdated = left.updatedAt ? Date.parse(left.updatedAt) : 0;
+  const rightUpdated = right.updatedAt ? Date.parse(right.updatedAt) : 0;
+  return rightUpdated - leftUpdated;
+}
+
+function buildEmptyForensicsModelSummary(
+  runtimeName: string,
+  modelRunName: string,
+  modelName: string | null,
+  providerName: string | null,
+  outcome: BenchLabArtifactOutcome
+): BenchLabForensicsModelSummary {
+  return {
+    baselineErrorItems: 0,
+    baselineErrorRatePercent: 0,
+    baselineTotalItems: 0,
+    buckets: [],
+    deltaErrorItems: 0,
+    dominantBucket: null,
+    modelName,
+    name: modelRunName,
+    outcome,
+    providerName,
+    ralphErrorItems: 0,
+    ralphErrorRatePercent: 0,
+    ralphTotalItems: 0,
+    runtimeName,
+  };
+}
+
+function calculateErrorRate(errorItems: number, totalItems: number): number {
+  if (totalItems <= 0) {
+    return 0;
+  }
+  return Number(((errorItems / totalItems) * 100).toFixed(2));
+}
+
+function getForensicsRegistrySide(
+  registryName: string
+): "baseline" | "ralph" | null {
+  const normalized = registryName.toLowerCase();
+  if (normalized.includes("baseline")) {
+    return "baseline";
+  }
+  if (normalized.includes("ralph")) {
+    return "ralph";
+  }
+  return null;
+}
+
+function getRawForensicsReasonText(rawReason: unknown): string | null {
+  if (typeof rawReason === "string") {
+    return rawReason;
+  }
+  if (!rawReason || typeof rawReason !== "object") {
+    return null;
+  }
+  const reasonObject = rawReason as Record<string, unknown>;
+  return (
+    toOptionalString(reasonObject.reason) ?? toOptionalString(reasonObject.type)
+  );
+}
+
+function getForensicsReasonCount(rawReason: unknown): number {
+  if (!rawReason || typeof rawReason !== "object") {
+    return 1;
+  }
+  const reasonObject = rawReason as Record<string, unknown>;
+  return toFiniteNumber(reasonObject.count) ?? 1;
+}
+
+function getForensicsReasonSampleIds(rawReason: unknown): string[] {
+  if (!rawReason || typeof rawReason !== "object") {
+    return [];
+  }
+  const reasonObject = rawReason as Record<string, unknown>;
+  return Array.isArray(reasonObject.sample_ids)
+    ? reasonObject.sample_ids.filter(
+        (item): item is string => typeof item === "string"
+      )
+    : [];
+}
+
+function mutateForensicsTotals(
+  side: "baseline" | "ralph",
+  errorItems: number,
+  totalItems: number,
+  totals: {
+    baselineErrorItems: number;
+    baselineTotalItems: number;
+    ralphErrorItems: number;
+    ralphTotalItems: number;
+  }
+): void {
+  if (side === "baseline") {
+    totals.baselineErrorItems += errorItems;
+    totals.baselineTotalItems += totalItems;
+    return;
+  }
+  totals.ralphErrorItems += errorItems;
+  totals.ralphTotalItems += totalItems;
+}
+
+function updateForensicsBucketMap(
+  bucketMap: Map<
+    string,
+    { baselineCount: number; ralphCount: number; sampleIds: Set<string> }
+  >,
+  side: "baseline" | "ralph",
+  bucket: string,
+  count: number,
+  sampleIds: string[]
+): void {
+  const existing = bucketMap.get(bucket) ?? {
+    baselineCount: 0,
+    ralphCount: 0,
+    sampleIds: new Set<string>(),
+  };
+  if (side === "baseline") {
+    existing.baselineCount += count;
+  } else {
+    existing.ralphCount += count;
+  }
+  for (const sampleId of sampleIds) {
+    if (existing.sampleIds.size >= 5) {
+      break;
+    }
+    existing.sampleIds.add(sampleId);
+  }
+  bucketMap.set(bucket, existing);
+}
+
+function finalizeForensicsBuckets(
+  bucketMap: Map<
+    string,
+    { baselineCount: number; ralphCount: number; sampleIds: Set<string> }
+  >
+): BenchLabForensicsBucketSummary[] {
+  return [...bucketMap.entries()]
+    .map(([bucket, counts]) => ({
+      baselineCount: counts.baselineCount,
+      bucket,
+      deltaCount: counts.ralphCount - counts.baselineCount,
+      ralphCount: counts.ralphCount,
+      sampleIds: [...counts.sampleIds].sort(),
+    }))
+    .sort(compareBucketSummaries);
+}
+
+function readRegistryForensics(
+  bucketMap: Map<
+    string,
+    { baselineCount: number; ralphCount: number; sampleIds: Set<string> }
+  >,
+  registryName: string,
+  registry: Record<string, unknown>,
+  totals: {
+    baselineErrorItems: number;
+    baselineTotalItems: number;
+    ralphErrorItems: number;
+    ralphTotalItems: number;
+  }
+): void {
+  const side = getForensicsRegistrySide(registryName);
+  if (!side) {
+    return;
+  }
+
+  const errorItems = toFiniteNumber(registry.error_items) ?? 0;
+  const totalItems = toFiniteNumber(registry.total_items) ?? 0;
+  mutateForensicsTotals(side, errorItems, totalItems, totals);
+
+  const reasons = Array.isArray(registry.error_reasons)
+    ? registry.error_reasons
+    : [];
+  let countedReasons = 0;
+  for (const rawReason of reasons) {
+    const count = getForensicsReasonCount(rawReason);
+    countedReasons += count;
+    updateForensicsBucketMap(
+      bucketMap,
+      side,
+      classifyForensicsBucket(getRawForensicsReasonText(rawReason)),
+      count,
+      getForensicsReasonSampleIds(rawReason)
+    );
+  }
+
+  const unmatchedCount = Math.max(errorItems - countedReasons, 0);
+  if (unmatchedCount > 0) {
+    updateForensicsBucketMap(bucketMap, side, "other", unmatchedCount, []);
+  }
+}
+
+function readModelRunForensicsSummary(
+  runtimeName: string,
+  modelRunName: string,
+  modelName: string | null,
+  providerName: string | null,
+  outcome: BenchLabArtifactOutcome,
+  errorForensicsPath: string
+): BenchLabForensicsModelSummary {
+  const payload = readJsonIfExists(errorForensicsPath);
+  if (
+    !payload ||
+    typeof payload.registries !== "object" ||
+    payload.registries === null
+  ) {
+    return buildEmptyForensicsModelSummary(
+      runtimeName,
+      modelRunName,
+      modelName,
+      providerName,
+      outcome
+    );
+  }
+
+  const bucketMap = new Map<
+    string,
+    { baselineCount: number; ralphCount: number; sampleIds: Set<string> }
+  >();
+  const totals = {
+    baselineErrorItems: 0,
+    baselineTotalItems: 0,
+    ralphErrorItems: 0,
+    ralphTotalItems: 0,
+  };
+
+  for (const [registryName, rawRegistry] of Object.entries(
+    payload.registries
+  )) {
+    if (!rawRegistry || typeof rawRegistry !== "object") {
+      continue;
+    }
+    readRegistryForensics(
+      bucketMap,
+      registryName,
+      rawRegistry as Record<string, unknown>,
+      totals
+    );
+  }
+
+  const buckets = finalizeForensicsBuckets(bucketMap);
+  const dominantBucket = buckets[0]?.bucket ?? null;
+
+  return {
+    baselineErrorItems: totals.baselineErrorItems,
+    baselineErrorRatePercent: calculateErrorRate(
+      totals.baselineErrorItems,
+      totals.baselineTotalItems
+    ),
+    baselineTotalItems: totals.baselineTotalItems,
+    buckets,
+    deltaErrorItems: totals.ralphErrorItems - totals.baselineErrorItems,
+    dominantBucket,
+    modelName,
+    name: modelRunName,
+    outcome,
+    providerName,
+    ralphErrorItems: totals.ralphErrorItems,
+    ralphErrorRatePercent: calculateErrorRate(
+      totals.ralphErrorItems,
+      totals.ralphTotalItems
+    ),
+    ralphTotalItems: totals.ralphTotalItems,
+    runtimeName,
+  };
+}
+
+function readRuntimeForensicsSummary(
+  runtimeName: string,
+  runtimeRoot: string,
+  records: BenchLabRuntimeRecordSummary[]
+): BenchLabRuntimeForensicsSummary {
+  const bucketMap = new Map<
+    string,
+    { baselineCount: number; ralphCount: number; sampleIds: Set<string> }
+  >();
+  const modelRuns = records
+    .map((record) =>
+      readModelRunForensicsSummary(
+        runtimeName,
+        slugify(record.id),
+        record.modelName,
+        record.providerName,
+        determineArtifactOutcome(record.overallDeltaPp),
+        join(runtimeRoot, "runs", slugify(record.id), "error_forensics.json")
+      )
+    )
+    .sort((left, right) => {
+      const leftMagnitude = Math.abs(left.deltaErrorItems);
+      const rightMagnitude = Math.abs(right.deltaErrorItems);
+      if (leftMagnitude !== rightMagnitude) {
+        return rightMagnitude - leftMagnitude;
+      }
+      return left.name.localeCompare(right.name);
+    });
+
+  const totals = {
+    baselineErrorItems: 0,
+    baselineTotalItems: 0,
+    modelsWithErrors: 0,
+    modelsWithImprovedErrors: 0,
+    modelsWithRegressedErrors: 0,
+    ralphErrorItems: 0,
+    ralphTotalItems: 0,
+  };
+
+  for (const modelRun of modelRuns) {
+    totals.baselineErrorItems += modelRun.baselineErrorItems;
+    totals.baselineTotalItems += modelRun.baselineTotalItems;
+    totals.ralphErrorItems += modelRun.ralphErrorItems;
+    totals.ralphTotalItems += modelRun.ralphTotalItems;
+    if (modelRun.baselineErrorItems > 0 || modelRun.ralphErrorItems > 0) {
+      totals.modelsWithErrors += 1;
+    }
+    if (modelRun.deltaErrorItems < 0) {
+      totals.modelsWithImprovedErrors += 1;
+    } else if (modelRun.deltaErrorItems > 0) {
+      totals.modelsWithRegressedErrors += 1;
+    }
+
+    for (const bucket of modelRun.buckets) {
+      updateForensicsBucketMap(
+        bucketMap,
+        "baseline",
+        bucket.bucket,
+        bucket.baselineCount,
+        bucket.sampleIds
+      );
+      updateForensicsBucketMap(
+        bucketMap,
+        "ralph",
+        bucket.bucket,
+        bucket.ralphCount,
+        bucket.sampleIds
+      );
+    }
+  }
+
+  const buckets = finalizeForensicsBuckets(bucketMap);
+
+  let updatedAt: string | null = null;
+  try {
+    updatedAt = statSync(runtimeRoot).mtime.toISOString();
+  } catch {
+    updatedAt = null;
+  }
+
+  return {
+    baselineErrorItems: totals.baselineErrorItems,
+    baselineErrorRatePercent: calculateErrorRate(
+      totals.baselineErrorItems,
+      totals.baselineTotalItems
+    ),
+    baselineTotalItems: totals.baselineTotalItems,
+    buckets,
+    modelRuns,
+    modelsWithErrors: totals.modelsWithErrors,
+    modelsWithImprovedErrors: totals.modelsWithImprovedErrors,
+    modelsWithRegressedErrors: totals.modelsWithRegressedErrors,
+    ralphErrorItems: totals.ralphErrorItems,
+    ralphErrorRatePercent: calculateErrorRate(
+      totals.ralphErrorItems,
+      totals.ralphTotalItems
+    ),
+    ralphTotalItems: totals.ralphTotalItems,
+    runtimeName,
+    updatedAt,
+  };
+}
+
+function buildRuntimeCompare(
+  repoRoot: string,
+  matrixRoot: string,
+  leftRuntimeName: string,
+  rightRuntimeName: string
+): JsonObject {
+  const leftRuntimeRoot = safeResolveWithin(matrixRoot, leftRuntimeName);
+  const rightRuntimeRoot = safeResolveWithin(matrixRoot, rightRuntimeName);
+  if (!existsSync(leftRuntimeRoot)) {
+    throw new HttpError(404, `runtime not found: ${leftRuntimeName}`);
+  }
+  if (!existsSync(rightRuntimeRoot)) {
+    throw new HttpError(404, `runtime not found: ${rightRuntimeName}`);
+  }
+
+  const leftRun = readRuntimeSummary(leftRuntimeRoot);
+  const rightRun = readRuntimeSummary(rightRuntimeRoot);
+  const leftRecords = readRuntimeRecordSummaries(
+    repoRoot,
+    leftRuntimeName,
+    leftRuntimeRoot
+  );
+  const rightRecords = readRuntimeRecordSummaries(
+    repoRoot,
+    rightRuntimeName,
+    rightRuntimeRoot
+  );
+
+  const matchedRows: JsonObject[] = [];
+  const matchedLeftIds = new Set<string>();
+  const matchedRightIds = new Set<string>();
+  const rightById = new Map(rightRecords.map((record) => [record.id, record]));
+
+  for (const leftRecord of leftRecords) {
+    const rightRecord = rightById.get(leftRecord.id);
+    if (!rightRecord) {
+      continue;
+    }
+    matchedLeftIds.add(leftRecord.id);
+    matchedRightIds.add(rightRecord.id);
+    matchedRows.push(buildRuntimeCompareRow(leftRecord, rightRecord));
+  }
+
+  const remainingLeft = leftRecords.filter(
+    (record) => !matchedLeftIds.has(record.id)
+  );
+  const remainingRight = rightRecords.filter(
+    (record) => !matchedRightIds.has(record.id)
+  );
+
+  const leftByModelKey = new Map<string, BenchLabRuntimeRecordSummary[]>();
+  const rightByModelKey = new Map<string, BenchLabRuntimeRecordSummary[]>();
+  for (const record of remainingLeft) {
+    const key = buildRuntimeRecordModelKey(record);
+    leftByModelKey.set(key, [...(leftByModelKey.get(key) ?? []), record]);
+  }
+  for (const record of remainingRight) {
+    const key = buildRuntimeRecordModelKey(record);
+    rightByModelKey.set(key, [...(rightByModelKey.get(key) ?? []), record]);
+  }
+
+  for (const [key, leftGroup] of leftByModelKey.entries()) {
+    const rightGroup = rightByModelKey.get(key);
+    if (!(leftGroup?.length === 1 && rightGroup?.length === 1)) {
+      continue;
+    }
+    const [leftRecord] = leftGroup;
+    const [rightRecord] = rightGroup;
+    matchedLeftIds.add(leftRecord.id);
+    matchedRightIds.add(rightRecord.id);
+    matchedRows.push(buildRuntimeCompareRow(leftRecord, rightRecord));
+  }
+
+  const leftOnly = leftRecords
+    .filter((record) => !matchedLeftIds.has(record.id))
+    .sort(compareRuntimeRecordsByQuality)
+    .map(summarizeRuntimeCompareSide);
+  const rightOnly = rightRecords
+    .filter((record) => !matchedRightIds.has(record.id))
+    .sort(compareRuntimeRecordsByQuality)
+    .map(summarizeRuntimeCompareSide);
+
+  const sortedRows = matchedRows.sort((left, right) => {
+    const leftShift = Math.abs((left.deltaPpShift as number | null) ?? 0);
+    const rightShift = Math.abs((right.deltaPpShift as number | null) ?? 0);
+    if (leftShift !== rightShift) {
+      return rightShift - leftShift;
+    }
+    return String(left.modelName ?? left.key).localeCompare(
+      String(right.modelName ?? right.key)
+    );
+  });
+
+  const rightBetter = sortedRows.filter(
+    (row) => row.verdict === "right-better"
+  ).length;
+  const leftBetter = sortedRows.filter(
+    (row) => row.verdict === "left-better"
+  ).length;
+  const same = sortedRows.length - rightBetter - leftBetter;
+
+  return {
+    leftRun,
+    rightRun,
+    rows: sortedRows,
+    summary: {
+      leftBetter,
+      leftOnly: leftOnly.length,
+      rightBetter,
+      rightOnly: rightOnly.length,
+      same,
+      shared: sortedRows.length,
+    },
+    leftOnly,
+    rightOnly,
+  };
+}
+
+function buildRuntimeCompareRow(
+  left: BenchLabRuntimeRecordSummary,
+  right: BenchLabRuntimeRecordSummary
+): JsonObject {
+  const leftDelta = left.overallDeltaPp;
+  const rightDelta = right.overallDeltaPp;
+  const deltaPpShift =
+    leftDelta !== null && rightDelta !== null
+      ? Number((rightDelta - leftDelta).toFixed(4))
+      : null;
+  let verdict = "same";
+  if (deltaPpShift !== null) {
+    if (deltaPpShift > 0) {
+      verdict = "right-better";
+    } else if (deltaPpShift < 0) {
+      verdict = "left-better";
+    }
+  }
+
+  return {
+    deltaPpShift,
+    key: buildRuntimeRecordModelKey(left),
+    left: summarizeRuntimeCompareSide(left),
+    modelName: left.modelName ?? right.modelName,
+    providerName: left.providerName ?? right.providerName,
+    right: summarizeRuntimeCompareSide(right),
+    verdict,
+  };
+}
+
+function summarizeRuntimeCompareSide(
+  record: BenchLabRuntimeRecordSummary
+): JsonObject {
+  return {
+    casesPerCategory: record.casesPerCategory,
+    deltaPp: record.overallDeltaPp,
+    id: record.id,
+    outcome: record.outcome,
+    ralphVariant: record.ralphVariant,
+    status: record.status,
+  };
+}
+
+function buildRuntimeRecordModelKey(
+  record: BenchLabRuntimeRecordSummary
+): string {
+  if (record.providerName && record.modelName) {
+    return `${record.providerName}::${record.modelName}`;
+  }
+  if (record.modelName) {
+    return record.modelName;
+  }
+  return record.id;
+}
+
+function listVariantLeaderboards(
+  repoRoot: string,
+  matrixRoot: string
+): JsonObject {
+  const records = readAllRuntimeRecordSummaries(repoRoot, matrixRoot).filter(
+    (record) => record.status === "completed"
+  );
+
+  const variantGroups = new Map<
+    string,
+    {
+      avgTotal: number;
+      bestDelta: number;
+      improvedCount: number;
+      lastSeenAt: string | null;
+      modelKeySet: Set<string>;
+      runsCount: number;
+      variant: string;
+      worstDelta: number;
+    }
+  >();
+  const modelGroups = new Map<
+    string,
+    {
+      forensicsBuckets: Map<string, number>;
+      kind: string | null;
+      modelName: string | null;
+      providerName: string | null;
+      records: BenchLabRuntimeRecordSummary[];
+    }
+  >();
+
+  for (const record of records) {
+    const variant = record.ralphVariant ?? "default";
+    const modelKey = buildRuntimeRecordModelKey(record);
+    const variantKey = `${modelKey}::${variant}`;
+    const group = variantGroups.get(variantKey) ?? {
+      avgTotal: 0,
+      bestDelta: Number.NEGATIVE_INFINITY,
+      improvedCount: 0,
+      lastSeenAt: null,
+      modelKeySet: new Set<string>(),
+      runsCount: 0,
+      variant,
+      worstDelta: Number.POSITIVE_INFINITY,
+    };
+    const delta = record.overallDeltaPp ?? 0;
+    group.avgTotal += delta;
+    group.bestDelta = Math.max(group.bestDelta, delta);
+    group.improvedCount += delta > 0 ? 1 : 0;
+    group.lastSeenAt =
+      !group.lastSeenAt ||
+      (record.updatedAt && record.updatedAt > group.lastSeenAt)
+        ? record.updatedAt
+        : group.lastSeenAt;
+    group.modelKeySet.add(modelKey);
+    group.runsCount += 1;
+    group.worstDelta = Math.min(group.worstDelta, delta);
+    variantGroups.set(variantKey, group);
+
+    const modelGroup = modelGroups.get(modelKey) ?? {
+      forensicsBuckets: new Map<string, number>(),
+      kind: record.kind,
+      modelName: record.modelName,
+      providerName: record.providerName,
+      records: [],
+    };
+    modelGroup.records.push(record);
+    const forensics = readModelRunForensicsSummary(
+      record.runtimeName,
+      slugify(record.id),
+      record.modelName,
+      record.providerName,
+      determineArtifactOutcome(record.overallDeltaPp),
+      join(record.runtimeRoot, "error_forensics.json")
+    );
+    for (const bucket of forensics.buckets) {
+      modelGroup.forensicsBuckets.set(
+        bucket.bucket,
+        (modelGroup.forensicsBuckets.get(bucket.bucket) ?? 0) +
+          bucket.baselineCount +
+          bucket.ralphCount
+      );
+    }
+    modelGroups.set(modelKey, modelGroup);
+  }
+
+  const variants: BenchLabVariantLeaderboardEntry[] = [
+    ...variantGroups.entries(),
+  ]
+    .map(([key, group]) => ({
+      avgDeltaPp: Number((group.avgTotal / group.runsCount).toFixed(4)),
+      bestDeltaPp: Number(group.bestDelta.toFixed(4)),
+      id: key,
+      improvedCount: group.improvedCount,
+      lastSeenAt: group.lastSeenAt,
+      modelKey: [...group.modelKeySet][0] ?? key,
+      modelsCount: group.modelKeySet.size,
+      runsCount: group.runsCount,
+      successRatePercent: Number(
+        ((group.improvedCount / group.runsCount) * 100).toFixed(2)
+      ),
+      variant: group.variant,
+      worstDeltaPp: Number(group.worstDelta.toFixed(4)),
+    }))
+    .sort((left, right) => {
+      if (left.avgDeltaPp !== right.avgDeltaPp) {
+        return right.avgDeltaPp - left.avgDeltaPp;
+      }
+      return right.runsCount - left.runsCount;
+    });
+
+  const recommendations: BenchLabVariantRecommendation[] = [
+    ...modelGroups.values(),
+  ]
+    .map((group) => buildVariantRecommendation(group))
+    .sort((left, right) => {
+      const stageRank: Record<string, number> = {
+        promising: 0,
+        exploring: 1,
+        stalled: 2,
+        validated: 3,
+      };
+      const leftRank = stageRank[left.stage] ?? 99;
+      const rightRank = stageRank[right.stage] ?? 99;
+      if (leftRank !== rightRank) {
+        return leftRank - rightRank;
+      }
+      return (
+        (right.bestDeltaPp ?? Number.NEGATIVE_INFINITY) -
+        (left.bestDeltaPp ?? Number.NEGATIVE_INFINITY)
+      );
+    });
+
+  return {
+    recommendations,
+    summary: {
+      models: recommendations.length,
+      variants: variants.length,
+    },
+    variants,
+  };
+}
+
+function buildVariantRecommendation(group: {
+  forensicsBuckets: Map<string, number>;
+  kind: string | null;
+  modelName: string | null;
+  providerName: string | null;
+  records: BenchLabRuntimeRecordSummary[];
+}): BenchLabVariantRecommendation {
+  const records = [...group.records].sort(compareRuntimeRecordsByQuality);
+  const bestRecord = records[0] ?? null;
+  const testedVariants = [
+    ...new Set(records.map((record) => record.ralphVariant ?? "default")),
+  ];
+  const bestDeltaPp = bestRecord?.overallDeltaPp ?? null;
+  const bestCasesPerCategory = bestRecord?.casesPerCategory ?? null;
+  const dominantBucket =
+    [...group.forensicsBuckets.entries()].sort(
+      (left, right) => right[1] - left[1]
+    )[0]?.[0] ?? null;
+  const nextVariantsToTry = suggestVariantsToTry(
+    testedVariants,
+    bestDeltaPp,
+    bestCasesPerCategory,
+    dominantBucket
+  );
+  const stage = determineVariantStage(
+    bestDeltaPp,
+    bestCasesPerCategory,
+    testedVariants.length
+  );
+  const recommendedCasesPerCategory = getRecommendedCasesForStage(stage);
+  const suggestedModelEntry = buildSuggestedModelEntry(
+    group.kind,
+    group.modelName,
+    group.providerName,
+    nextVariantsToTry[0] ?? null
+  );
+
+  return {
+    bestCasesPerCategory,
+    bestDeltaPp,
+    bestVariant: bestRecord?.ralphVariant ?? null,
+    dominantBucket,
+    kind: group.kind,
+    modelName: group.modelName,
+    nextVariantsToTry,
+    providerName: group.providerName,
+    recommendedCasesPerCategory,
+    stage,
+    suggestedModelEntry,
+    testedVariants,
+  };
+}
+
+function buildSuggestedModelEntry(
+  kind: string | null,
+  modelName: string | null,
+  providerName: string | null,
+  variant: string | null
+): BenchLabSuggestedModelEntry | null {
+  if (!(modelName && variant)) {
+    return null;
+  }
+  return {
+    id: `${slugify(providerName ?? "model")}-${slugify(modelName)}-${variant}`,
+    kind,
+    model_name: modelName,
+    provider_name: providerName,
+    ralph_variant: variant,
+  };
+}
+
+function determineVariantStage(
+  bestDeltaPp: number | null,
+  bestCasesPerCategory: number | null,
+  testedVariantsCount: number
+): string {
+  if (
+    bestDeltaPp !== null &&
+    bestDeltaPp > 0 &&
+    (bestCasesPerCategory ?? 0) >= 10
+  ) {
+    return "validated";
+  }
+  if (bestDeltaPp !== null && bestDeltaPp > 0) {
+    return "promising";
+  }
+  if (testedVariantsCount >= 3) {
+    return "stalled";
+  }
+  return "exploring";
+}
+
+function getRecommendedCasesForStage(stage: string): number {
+  if (stage === "validated") {
+    return 20;
+  }
+  if (stage === "promising") {
+    return 10;
+  }
+  return 5;
+}
+
+function suggestVariantsToTry(
+  testedVariants: string[],
+  bestDeltaPp: number | null,
+  bestCasesPerCategory: number | null,
+  dominantBucket: string | null
+): string[] {
+  if (
+    bestDeltaPp !== null &&
+    bestDeltaPp > 0 &&
+    (bestCasesPerCategory ?? 0) >= 10
+  ) {
+    return [];
+  }
+
+  const priority = getVariantPriorityForBucket(dominantBucket);
+
+  return [...priority, ...KNOWN_RALPH_VARIANTS]
+    .filter((variant, index, items) => items.indexOf(variant) === index)
+    .filter((variant) => !testedVariants.includes(variant))
+    .slice(0, 4);
+}
+
+function getVariantPriorityForBucket(dominantBucket: string | null): string[] {
+  const bucketPriorities: Record<string, string[]> = {
+    inference_error: ["schema-lock", "minimal", "coverage"],
+    missing_args: ["coverage", "schema-lock", "strict"],
+    planning: ["parallel-safe", "call-count", "coverage"],
+    provider_error: ["minimal"],
+    schema_mismatch: ["schema-lock", "strict", "coverage"],
+    timeout: ["minimal", "compact", "default"],
+    tool_selection: ["schema-lock", "strict", "minimal"],
+  };
+  return (
+    (dominantBucket ? bucketPriorities[dominantBucket] : null) ?? [
+      "schema-lock",
+      "minimal",
+      "coverage",
+      "parallel-safe",
+    ]
+  );
 }
 
 function defaultJobLauncher(request: BenchLabJobRequest): BenchLabLaunchedJob {
@@ -463,6 +1863,220 @@ function listRuntimeRoots(matrixRoot: string): string[] {
   return readdirSync(matrixRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name.startsWith("runtime"))
     .map((entry) => join(matrixRoot, entry.name));
+}
+
+function readRuntimeModelSummary(
+  repoRoot: string,
+  runtimeName: string,
+  runtimeRoot: string,
+  modelRunRoot: string
+): BenchLabRuntimeModelSummary {
+  const summaryPath = join(modelRunRoot, "summary.json");
+  const reportPath = join(modelRunRoot, "benchmark_report.md");
+  const stdoutPath = join(modelRunRoot, "stdout.log");
+  const stderrPath = join(modelRunRoot, "stderr.log");
+  const summary = readJsonIfExists(summaryPath);
+  const reportMarkdown = readTextIfExists(reportPath);
+  const stdoutText = readTextTail(stdoutPath, 20_000);
+  const stderrText = readTextTail(stderrPath, 20_000);
+
+  const metrics =
+    summary?.metrics_percent_point &&
+    typeof summary.metrics_percent_point === "object"
+      ? (summary.metrics_percent_point as Record<string, unknown>)
+      : null;
+  const overall =
+    metrics?.["Overall Acc"] && typeof metrics["Overall Acc"] === "object"
+      ? (metrics["Overall Acc"] as Record<string, unknown>)
+      : null;
+  const baselineScore = toFiniteNumber(overall?.baseline);
+  const ralphScore = toFiniteNumber(overall?.ralph);
+  const deltaPp = toFiniteNumber(overall?.delta);
+
+  let updatedAt: string | null = null;
+  try {
+    updatedAt = statSync(summaryPath).mtime.toISOString();
+  } catch {
+    try {
+      updatedAt = statSync(modelRunRoot).mtime.toISOString();
+    } catch {
+      updatedAt = null;
+    }
+  }
+
+  const progress = readRuntimeModelProgress(stdoutText, stderrText);
+  const isRunning = progress.current !== null || progress.phase !== null;
+  let status: BenchLabRuntimeModelSummary["status"] = "pending";
+  if (summary) {
+    status = "completed";
+  } else if (isRunning) {
+    status = "running";
+  }
+
+  return {
+    baselineScore,
+    casesPerCategory:
+      typeof summary?.cases_per_category === "number"
+        ? summary.cases_per_category
+        : null,
+    categories: Array.isArray(summary?.categories)
+      ? summary.categories.filter(
+          (item): item is string => typeof item === "string"
+        )
+      : [],
+    deltaPp,
+    executionPhase: progress.phase,
+    modelName: parseBenchmarkReportField(reportMarkdown, "Model"),
+    name: relative(join(runtimeRoot, "runs"), modelRunRoot),
+    outcome: determineArtifactOutcome(deltaPp),
+    providerName: parseBenchmarkReportField(reportMarkdown, "Provider"),
+    progressCurrent: progress.current,
+    progressPercent: progress.percent,
+    progressTotal: progress.total,
+    ralphScore,
+    relativeDeltaPercent: computeRelativeDeltaPercent(baselineScore, deltaPp),
+    reportRelativePath: existsSync(reportPath)
+      ? toRepoRelativePath(repoRoot, reportPath)
+      : null,
+    runtimeName,
+    runtimeRoot,
+    status,
+    summaryRelativePath: existsSync(summaryPath)
+      ? toRepoRelativePath(repoRoot, summaryPath)
+      : null,
+    updatedAt,
+  };
+}
+
+function readRuntimeModelProgress(
+  stdoutText: string | null,
+  stderrText: string | null
+): {
+  current: number | null;
+  percent: number | null;
+  phase: string | null;
+  total: number | null;
+} {
+  const combined = `${stdoutText ?? ""}\n${stderrText ?? ""}`;
+  const progressMatches = [
+    ...combined.matchAll(
+      /Generating results for (.+):\s+(\d+)%.*?(\d+)\/(\d+)/g
+    ),
+  ];
+  const latestProgress = progressMatches.at(-1);
+  if (latestProgress) {
+    return {
+      phase: latestProgress[1]?.trim() || null,
+      percent: Number.parseInt(latestProgress[2] ?? "", 10) || null,
+      current: Number.parseInt(latestProgress[3] ?? "", 10) || null,
+      total: Number.parseInt(latestProgress[4] ?? "", 10) || null,
+    };
+  }
+
+  const phaseMatches = [
+    ...combined.matchAll(/Generating results for \[(.+)\]/g),
+  ];
+  const latestPhase = phaseMatches.at(-1);
+  return {
+    current: null,
+    percent: null,
+    phase: latestPhase?.[1]?.trim() || null,
+    total: null,
+  };
+}
+
+function listRuntimeModelSummaries(
+  repoRoot: string,
+  runtimeName: string,
+  runtimeRoot: string
+): BenchLabRuntimeModelSummary[] {
+  const runsRoot = join(runtimeRoot, "runs");
+  if (!existsSync(runsRoot)) {
+    return [];
+  }
+
+  const outcomeRank: Record<BenchLabArtifactOutcome, number> = {
+    improved: 0,
+    flat: 1,
+    regressed: 2,
+    unknown: 3,
+  };
+  const statusRank: Record<BenchLabRuntimeModelSummary["status"], number> = {
+    running: 0,
+    pending: 1,
+    completed: 2,
+  };
+
+  return readdirSync(runsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) =>
+      readRuntimeModelSummary(
+        repoRoot,
+        runtimeName,
+        runtimeRoot,
+        join(runsRoot, entry.name)
+      )
+    )
+    .sort((left, right) => {
+      const leftStatusRank = statusRank[left.status];
+      const rightStatusRank = statusRank[right.status];
+      if (leftStatusRank !== rightStatusRank) {
+        return leftStatusRank - rightStatusRank;
+      }
+      const leftRank = outcomeRank[left.outcome];
+      const rightRank = outcomeRank[right.outcome];
+      if (leftRank !== rightRank) {
+        return leftRank - rightRank;
+      }
+      const leftDelta = left.deltaPp ?? Number.NEGATIVE_INFINITY;
+      const rightDelta = right.deltaPp ?? Number.NEGATIVE_INFINITY;
+      if (leftDelta !== rightDelta) {
+        return rightDelta - leftDelta;
+      }
+      const leftTs = left.updatedAt ? Date.parse(left.updatedAt) : 0;
+      const rightTs = right.updatedAt ? Date.parse(right.updatedAt) : 0;
+      return rightTs - leftTs;
+    });
+}
+
+function readRuntimeModelDetail(
+  repoRoot: string,
+  runtimeName: string,
+  runtimeRoot: string,
+  modelRunName: string
+): JsonObject {
+  const modelRunRoot = safeResolveWithin(
+    join(runtimeRoot, "runs"),
+    modelRunName
+  );
+  if (!existsSync(modelRunRoot)) {
+    throw new HttpError(
+      404,
+      `model run not found: ${runtimeName}/${modelRunName}`
+    );
+  }
+
+  const summary = readRuntimeModelSummary(
+    repoRoot,
+    runtimeName,
+    runtimeRoot,
+    modelRunRoot
+  );
+  return {
+    forensics: readModelRunForensicsSummary(
+      runtimeName,
+      modelRunName,
+      summary.modelName,
+      summary.providerName,
+      summary.outcome,
+      join(modelRunRoot, "error_forensics.json")
+    ),
+    modelRun: summary,
+    reportMarkdown: readTextIfExists(join(modelRunRoot, "benchmark_report.md")),
+    summaryJson: readJsonIfExists(join(modelRunRoot, "summary.json")),
+    stdout: readTextTail(join(modelRunRoot, "stdout.log"), 20_000),
+    stderr: readTextTail(join(modelRunRoot, "stderr.log"), 20_000),
+  };
 }
 
 function listRuntimeSummaries(matrixRoot: string): BenchLabRuntimeSummary[] {
@@ -864,6 +2478,63 @@ export function createBenchLabApiServer(
     return true;
   }
 
+  function handleArtifactsRoute(
+    request: IncomingMessage,
+    response: ServerResponse,
+    pathname: string
+  ): boolean {
+    if (request.method !== "GET" || pathname !== "/v1/benchlab/artifacts") {
+      return false;
+    }
+    sendJson(response, 200, {
+      artifacts: listArtifactSummaries(repoRoot),
+    });
+    return true;
+  }
+
+  function handleBestArtifactsRoute(
+    request: IncomingMessage,
+    response: ServerResponse,
+    pathname: string
+  ): boolean {
+    if (
+      request.method !== "GET" ||
+      pathname !== "/v1/benchlab/artifacts/best"
+    ) {
+      return false;
+    }
+    sendJson(response, 200, {
+      artifacts: listBestArtifactSummaries(repoRoot),
+    });
+    return true;
+  }
+
+  function handleArtifactDetailRoute(
+    request: IncomingMessage,
+    response: ServerResponse,
+    pathname: string
+  ): boolean {
+    if (
+      request.method !== "GET" ||
+      !pathname.startsWith("/v1/benchlab/artifacts/")
+    ) {
+      return false;
+    }
+
+    const artifactId = decodeURIComponent(
+      pathname.slice("/v1/benchlab/artifacts/".length)
+    );
+    const artifact = listArtifactSummaries(repoRoot).find(
+      (entry) => entry.id === artifactId
+    );
+    if (!artifact) {
+      throw new HttpError(404, `artifact not found: ${artifactId}`);
+    }
+
+    sendJson(response, 200, readArtifactDetail(repoRoot, artifact));
+    return true;
+  }
+
   function handleRunDetailRoute(
     request: IncomingMessage,
     response: ServerResponse,
@@ -890,6 +2561,142 @@ export function createBenchLabApiServer(
     return true;
   }
 
+  function handleRunModelsRoute(
+    request: IncomingMessage,
+    response: ServerResponse,
+    pathname: string
+  ): boolean {
+    if (
+      request.method !== "GET" ||
+      !pathname.startsWith("/v1/benchlab/runs/") ||
+      !pathname.endsWith("/models")
+    ) {
+      return false;
+    }
+
+    const runName = decodeURIComponent(
+      pathname.slice("/v1/benchlab/runs/".length, -"/models".length)
+    );
+    const runtimeRoot = safeResolveWithin(matrixRoot, runName);
+    if (!existsSync(runtimeRoot)) {
+      throw new HttpError(404, `runtime not found: ${runName}`);
+    }
+
+    sendJson(response, 200, {
+      modelRuns: listRuntimeModelSummaries(repoRoot, runName, runtimeRoot),
+    });
+    return true;
+  }
+
+  function handleRunForensicsRoute(
+    request: IncomingMessage,
+    response: ServerResponse,
+    pathname: string
+  ): boolean {
+    if (
+      request.method !== "GET" ||
+      !pathname.startsWith("/v1/benchlab/runs/") ||
+      !pathname.endsWith("/forensics")
+    ) {
+      return false;
+    }
+
+    const runName = decodeURIComponent(
+      pathname.slice("/v1/benchlab/runs/".length, -"/forensics".length)
+    );
+    const runtimeRoot = safeResolveWithin(matrixRoot, runName);
+    if (!existsSync(runtimeRoot)) {
+      throw new HttpError(404, `runtime not found: ${runName}`);
+    }
+
+    sendJson(response, 200, {
+      forensics: readRuntimeForensicsSummary(
+        runName,
+        runtimeRoot,
+        readRuntimeRecordSummaries(repoRoot, runName, runtimeRoot)
+      ),
+    });
+    return true;
+  }
+
+  function handleRunModelDetailRoute(
+    request: IncomingMessage,
+    response: ServerResponse,
+    pathname: string
+  ): boolean {
+    if (
+      request.method !== "GET" ||
+      !pathname.startsWith("/v1/benchlab/runs/") ||
+      pathname.endsWith("/models") ||
+      !pathname.includes("/models/")
+    ) {
+      return false;
+    }
+
+    const relativePath = pathname.slice("/v1/benchlab/runs/".length);
+    const separatorIndex = relativePath.indexOf("/models/");
+    if (separatorIndex < 0) {
+      return false;
+    }
+    const runName = decodeURIComponent(relativePath.slice(0, separatorIndex));
+    const modelRunName = decodeURIComponent(
+      relativePath.slice(separatorIndex + "/models/".length)
+    );
+    const runtimeRoot = safeResolveWithin(matrixRoot, runName);
+    if (!existsSync(runtimeRoot)) {
+      throw new HttpError(404, `runtime not found: ${runName}`);
+    }
+
+    sendJson(
+      response,
+      200,
+      readRuntimeModelDetail(repoRoot, runName, runtimeRoot, modelRunName)
+    );
+    return true;
+  }
+
+  function handleRuntimeCompareRoute(
+    request: IncomingMessage,
+    response: ServerResponse,
+    requestUrl: URL
+  ): boolean {
+    if (
+      request.method !== "GET" ||
+      requestUrl.pathname !== "/v1/benchlab/compare"
+    ) {
+      return false;
+    }
+
+    const leftRuntime = toOptionalString(requestUrl.searchParams.get("left"));
+    const rightRuntime = toOptionalString(requestUrl.searchParams.get("right"));
+    if (!(leftRuntime && rightRuntime)) {
+      throw new HttpError(400, "left and right query params are required");
+    }
+
+    sendJson(
+      response,
+      200,
+      buildRuntimeCompare(repoRoot, matrixRoot, leftRuntime, rightRuntime)
+    );
+    return true;
+  }
+
+  function handleVariantLeaderboardsRoute(
+    request: IncomingMessage,
+    response: ServerResponse,
+    pathname: string
+  ): boolean {
+    if (
+      request.method !== "GET" ||
+      pathname !== "/v1/benchlab/leaderboards/variants"
+    ) {
+      return false;
+    }
+
+    sendJson(response, 200, listVariantLeaderboards(repoRoot, matrixRoot));
+    return true;
+  }
+
   type BenchLabRouteHandler = (
     request: IncomingMessage,
     response: ServerResponse,
@@ -913,6 +2720,22 @@ export function createBenchLabApiServer(
       handleCancelJobRoute(request, response, requestUrl.pathname),
     (request, response, requestUrl) =>
       handleCreateJobRoute(request, response, requestUrl.pathname),
+    (request, response, requestUrl) =>
+      handleArtifactsRoute(request, response, requestUrl.pathname),
+    (request, response, requestUrl) =>
+      handleBestArtifactsRoute(request, response, requestUrl.pathname),
+    (request, response, requestUrl) =>
+      handleArtifactDetailRoute(request, response, requestUrl.pathname),
+    (request, response, requestUrl) =>
+      handleRuntimeCompareRoute(request, response, requestUrl),
+    (request, response, requestUrl) =>
+      handleVariantLeaderboardsRoute(request, response, requestUrl.pathname),
+    (request, response, requestUrl) =>
+      handleRunModelsRoute(request, response, requestUrl.pathname),
+    (request, response, requestUrl) =>
+      handleRunForensicsRoute(request, response, requestUrl.pathname),
+    (request, response, requestUrl) =>
+      handleRunModelDetailRoute(request, response, requestUrl.pathname),
     (request, response, requestUrl) =>
       handleRunsRoute(request, response, requestUrl.pathname),
     (request, response, requestUrl) =>
